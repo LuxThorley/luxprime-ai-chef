@@ -1,0 +1,41 @@
+name: Deploy full service to Cloudflare Workers
+on:
+  push:
+    branches: [main]
+    paths: ['worker/**', 'src/**', 'data/**', 'public/**', '.github/workflows/deploy-worker.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: worker-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HAS_CF: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+    steps:
+      - name: Skip when Cloudflare credentials are not configured
+        if: env.HAS_CF != 'true'
+        run: echo "::notice::Add repo secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to enable automatic Worker deploys."
+      - uses: actions/checkout@v4
+        if: env.HAS_CF == 'true'
+      - uses: actions/setup-node@v4
+        if: env.HAS_CF == 'true'
+        with:
+          node-version: 20
+      - name: Install (shared modules + worker)
+        if: env.HAS_CF == 'true'
+        run: npm ci && npm ci --prefix worker
+      - name: Secret scan
+        if: env.HAS_CF == 'true'
+        run: "! git grep -nE 'eyJhb[G]ci|sk_(l[i]ve|t[e]st)_[A-Za-z0-9]{10,}' -- . ':!package-lock.json' ':!worker/package-lock.json'"
+      - name: Apply D1 migrations and deploy
+        if: env.HAS_CF == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
+          command: deploy
+          preCommands: npx wrangler d1 migrations apply luxprime-ai-chef-db --remote

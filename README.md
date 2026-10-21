@@ -20,7 +20,32 @@ GitHub Pages only serves static files, so it cannot run Express, SQLite, Stripe 
 rewriting paths for the `/luxprime-ai-chef/` base and replacing server calls with `static/static-api.js`.
 `.github/workflows/pages.yml` builds and deploys it on every push to `main`; `.github/workflows/ci.yml` runs `npm test`.
 
-## Deploying the full server (Render)
+## Full service on Cloudflare Workers (live)
+
+**Live full service:** https://luxprime-ai-chef.oliverluxthorley.workers.dev
+
+`worker/` is a Workers-native port of `src/server.js` (Hono): same `/api/*` contract, so the `public/` frontend runs unchanged.
+
+* **D1** `luxprime-ai-chef-db` — `worker/migrations/0001_init.sql` (users, sessions, favourites, history, subscriptions, shares, stripe_events, rate_limits)
+* **Auth** — PBKDF2-SHA256 (WebCrypto, 100k iterations, per-user salt), revocable D1 sessions in an HttpOnly cookie, CSRF double-submit, D1 rate limits
+* **Stripe** over `fetch` (Checkout, Customer Portal) and webhook signature verification with WebCrypto HMAC (`/api/billing/webhook`)
+* **Malcolm AI** called from the Worker (`MALCOLM_AI_MODE=lattice`), curated-library fallback
+* **Workers Assets** serve `public/`; `/api/*` and `/r/*` run the Worker first; daily cron purges expired sessions
+* Shared logic (`src/ai.js`, `ranker.js`, `recipes.js`, `safety.js`, `plans.js`) is bundled from the same source as the Node server
+
+Worker secrets: `MALCOLM_AI_KEY`, `JWT_SECRET` (set). To switch on payments add `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`STRIPE_PRICE_MONTHLY`, `STRIPE_PRICE_FAMILY` (Stripe webhook → `https://luxprime-ai-chef.oliverluxthorley.workers.dev/api/billing/webhook`,
+events `checkout.session.completed`, `customer.subscription.*`). Optional `APP_URL` for a custom domain.
+
+```bash
+cd worker && npm ci && npx wrangler dev            # local (needs worker/.dev.vars, git-ignored)
+npx wrangler secret put STRIPE_SECRET_KEY          # add secrets (never commit them)
+npm run deploy                                     # migrations + deploy
+```
+CI: `.github/workflows/deploy-worker.yml` deploys on push once repo secrets `CLOUDFLARE_API_TOKEN` (scoped: Workers Scripts:Edit,
+D1:Edit, Account Settings:Read) and `CLOUDFLARE_ACCOUNT_ID` exist; otherwise it skips with a notice.
+
+## Deploying the Node server instead (Render)
 
 1. Render → **New → Web Service** → connect `LuxThorley/luxprime-ai-chef`. Runtime Node, build `npm ci`, start `npm start`
    (or use the included `Dockerfile`). Add a **persistent disk** mounted at e.g. `/var/data` and set `DB_PATH=/var/data/app.db`.
