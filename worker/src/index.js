@@ -7,6 +7,7 @@ import safety from '../../src/safety.js';
 import plansMod from '../../src/plans.js';
 import recipesMod from '../../src/recipes.js';
 import imagesMod from '../../src/images.js';
+import escoffier from '../../src/escoffier.js';
 import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSafeEqualStr } from './crypto.js';
 import { stripeApi } from './stripe.js';
 
@@ -18,7 +19,8 @@ const SearchSchema = z.object({
   dish: z.string().trim().max(200).optional().default(''), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'), servings: z.coerce.number().int().min(1).max(12).default(2),
   diets: z.array(z.enum(DIETS)).max(6).default([]), excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
-  cuisine: z.string().trim().max(40).default('any'), kidsMode: z.boolean().default(false)
+  cuisine: z.string().trim().max(40).default('any'), kidsMode: z.boolean().default(false),
+  escoffier: z.string().regex(/^\d{1,4}[a-z]?$/).optional()
 }).refine(q => q.include.length || q.dish, { message: 'Add at least one ingredient or describe a dish' });
 const AuthSchema = z.object({ email: z.string().trim().toLowerCase().email().max(200), password: z.string().min(8).max(200), name: z.string().trim().max(80).optional() });
 const RecipeBlob = z.object({ id: z.string().max(120), title: z.string().max(140) }).passthrough();
@@ -133,7 +135,8 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   // Same-account workers.dev subrequests are blocked, so reach the Malcolm worker through its service binding.
   const mBase = String(c.env.MALCOLM_AI_URL || '').replace(/\/+$/, '');
   const fetchImpl = (url, opts) => (c.env.MALCOLM && mBase && String(url).startsWith(mBase)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
-  const out = await ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1) });
+  let references = []; try { references = await escoffier.references(d1all(c), q, { pinned: q.escoffier }); } catch (e) { console.error('escoffier', e && e.message); }
+  const out = await ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1), references });
   const recipes = out.recipes.map(r => ({ ...r, image: imagesMod.curatedImage(r), safetyNotes: safetyNotes(r, q) }));
   await db(c).batch([
     db(c).prepare('UPDATE users SET searches_used = searches_used + 1 WHERE id=?').bind(u.id),
@@ -141,6 +144,11 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   const fresh = await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first();
   return c.json({ source: out.source, fallbackReason: out.fallbackReason, disclaimer: DISCLAIMER, recipes, user: publicUser(fresh) });
 });
+
+// Escoffier Classics (public domain, 1907) — browse/search + single entry.
+const d1all = c => async (sql, params) => (await db(c).prepare(sql).bind(...params).all()).results;
+app.get('/api/escoffier', async c => { const r = c.json(await escoffier.list(d1all(c), c.req.query())); r.headers.set('Cache-Control', 'public, max-age=300'); return r; });
+app.get('/api/escoffier/:no', async c => { const r = await escoffier.one(d1all(c), c.req.param('no')); return r ? c.json(r) : c.json({ error: 'Not found' }, 404); });
 
 app.get('/api/favourites', needAuth, needPremium, async c => { const { results } = await db(c).prepare('SELECT recipe_json FROM favourites WHERE user_id=? ORDER BY id DESC').bind(c.get('user').id).all(); return c.json({ favourites: results.map(r => JSON.parse(r.recipe_json)) }); });
 app.post('/api/favourites', needAuth, needPremium, async c => {

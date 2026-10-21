@@ -1,7 +1,7 @@
 'use strict';
 (async function(){
   const {api,esc,toast}=LP;const $=s=>document.querySelector(s);
-  let me=null,opts={diets:[],cuisines:[]};
+  let me=null,opts={diets:[],cuisines:[]};const escNo=(new URLSearchParams(location.search).get('escoffier')||'').match(/^\d{1,4}[a-z]?$/)?new URLSearchParams(location.search).get('escoffier'):null;
   try{[me,opts]=await Promise.all([api('/api/me').then(d=>d.user),api('/api/options')])}catch{}
   $('#cuisine').innerHTML=opts.cuisines.map(c=>`<option value="${esc(c)}">${c==='any'?'Any':esc(c)}</option>`).join('');
   $('#diets').innerHTML=opts.diets.map(d=>`<label><input type="checkbox" value="${esc(d)}"><span>${esc(d)}</span></label>`).join('');
@@ -23,7 +23,7 @@
   $('#search').onsubmit=async e=>{e.preventDefault();$('#formErr').textContent='';
     const ii=$('#inc-input'),ei=$('#exc-input');if(ii.value)inc.add(ii.value);if(ei.value)exc.add(ei.value);
     if(!me){$('#authDlg').showModal();return}
-    const body={include:tags.inc,exclude:tags.exc,dish:$('#dish').value.trim(),maxMinutes:+$('#time').value,difficulty:document.querySelector('[name=diff]:checked').value,servings:+$('#servings').value||2,cuisine:$('#cuisine').value,diets:[...document.querySelectorAll('#diets input:checked')].map(i=>i.value),kidsMode:$('#kids').checked};
+    const body={include:tags.inc,exclude:tags.exc,dish:$('#dish').value.trim(),maxMinutes:+$('#time').value,difficulty:document.querySelector('[name=diff]:checked').value,servings:+$('#servings').value||2,cuisine:$('#cuisine').value,diets:[...document.querySelectorAll('#diets input:checked')].map(i=>i.value),kidsMode:$('#kids').checked,...(escNo?{escoffier:escNo}:{})};
     if(!body.include.length&&!body.dish){$('#formErr').textContent='Add at least one ingredient or describe a dish.';show(1);return}
     const res=$('#results');const stop=LP.cooking(res,$('#go'));
     try{const d=await api('/api/search',{method:'POST',body});me=d.user;quota();stop();res.innerHTML='';
@@ -34,4 +34,5 @@
     }catch(err){stop();res.innerHTML=`<div class="card empty"><div class="big">🍳</div><h2>${esc(err.message)}</h2>${err.data&&err.data.upgrade?'<a class="btn" href="/pricing.html">See plans</a>':''}</div>`}
     finally{stop()}};
   const q=new URLSearchParams(location.search);if(q.get('i')){inc.add(q.get('i'))}
+  if(q.get('dish')){$('#dish').value=q.get('dish').slice(0,200)}if(escNo){const n=document.createElement('p');n.className='muted';n.style.fontSize='.85rem';n.innerHTML=`📖 Modernising Escoffier No. ${esc(escNo)}. Set your time and skill, then press Find my recipes.`;$('#dish').after(n)}
 })();

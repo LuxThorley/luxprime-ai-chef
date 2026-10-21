@@ -15,6 +15,16 @@ function open(file = process.env.DB_PATH || path.join(__dirname, '..', 'data', '
     query_json TEXT NOT NULL, titles TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
   CREATE TABLE IF NOT EXISTS shares (id TEXT PRIMARY KEY, recipe_json TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
   CREATE TABLE IF NOT EXISTS stripe_events (id TEXT PRIMARY KEY, created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
+  loadEscoffier(db);
   return db;
 }
-module.exports = { open };
+// Load the public-domain Escoffier guide into SQLite (FTS5) once.
+function loadEscoffier(db, file = path.join(__dirname, '..', 'data', 'escoffier.json')) {
+  const esc = require('./escoffier'); esc.SCHEMA_SQL.forEach(s => db.exec(s));
+  if (db.prepare('SELECT COUNT(*) c FROM escoffier').get().c || !fs.existsSync(file)) return;
+  const { entries } = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const ins = db.prepare('INSERT INTO escoffier(no,n,title,chapter,section,sub,text,ingredients,method,refs) VALUES(?,?,?,?,?,?,?,?,?,?)');
+  db.transaction(() => { for (const e of entries) ins.run(e.no, e.n, e.title, e.chapter, e.section, e.sub || null, e.text, e.ingredients ? JSON.stringify(e.ingredients) : null, e.method || null, e.refs ? JSON.stringify(e.refs) : null); })();
+  db.exec("INSERT INTO escoffier_fts(escoffier_fts) VALUES('rebuild')");
+}
+module.exports = { open, loadEscoffier };

@@ -6,7 +6,7 @@ const cookieParser = require('cookie-parser'); const bcrypt = require('bcryptjs'
 const { z } = require('zod');
 const { open } = require('./db'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
 const { plans, isPremium, isAdmin } = require('./plans'); const images = require('./images');
-const fsx = require('fs'); const { UK14 } = require('./recipes');
+const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14 } = require('./recipes');
 
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
@@ -18,7 +18,8 @@ const SearchSchema = z.object({
   servings: z.coerce.number().int().min(1).max(12).default(2),
   diets: z.array(z.enum(DIETS)).max(6).default([]),
   excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
-  cuisine: z.string().trim().max(40).default('any'), kidsMode: z.boolean().default(false)
+  cuisine: z.string().trim().max(40).default('any'), kidsMode: z.boolean().default(false),
+  escoffier: z.string().regex(/^\d{1,4}[a-z]?$/).optional()
 }).refine(q => q.include.length || q.dish, { message: 'Add at least one ingredient or describe a dish' });
 const AuthSchema = z.object({ email: z.string().trim().toLowerCase().email().max(200), password: z.string().min(8).max(200), name: z.string().trim().max(80).optional() });
 
@@ -116,7 +117,9 @@ function createApp({ db = open(), stripe } = {}) {
     if (!prem && u.searches_used >= pl.free.searches) return res.status(402).json({ error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' });
     const q = { ...p.data, difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
     if (q.kidsMode && !prem) q.kidsMode = true; // kids mode allowed in trial so families can try it
-    const out = await ai.generate(q);
+    const all = (sql, params) => db.prepare(sql).all(...params);
+    let references = []; try { references = await escoffier.references(all, q, { pinned: q.escoffier }); } catch (e) { console.error('escoffier', e.message); }
+    const out = await ai.generate(q, { references });
     const recipes = out.recipes.map(r => {
       const img = images.curatedImage(r);
       if (out.source !== 'offline' && images.imageEnabled()) { img.src = img.large = `/api/dish-image?title=${encodeURIComponent(r.title)}`; img.generated = true; img.fallback = images.curatedImage(r).src; }
@@ -127,6 +130,11 @@ function createApp({ db = open(), stripe } = {}) {
     const fresh = db.prepare('SELECT * FROM users WHERE id=?').get(u.id);
     res.json({ source: out.source, fallbackReason: out.fallbackReason, disclaimer: DISCLAIMER, recipes, user: publicUser(fresh) });
   }));
+
+  // ---- Escoffier Classics (public domain, 1907) ----
+  const escAll = (sql, params) => db.prepare(sql).all(...params);
+  app.get('/api/escoffier', a(async (req, res) => res.json(await escoffier.list(escAll, req.query))));
+  app.get('/api/escoffier/:no', a(async (req, res) => { const r = await escoffier.one(escAll, req.params.no); r ? res.json(r) : res.status(404).json({ error: 'Not found' }); }));
 
   // ---- Favourites / history (premium) ----
   const RecipeBlob = z.object({ id: z.string().max(120), title: z.string().max(140) }).passthrough();

@@ -4,6 +4,7 @@ const { z } = require('zod');
 const { rank, shoppingList } = require('./ranker');
 const { UK14 } = require('./recipes');
 const { isUnsafe, enforceAllergens } = require('./safety');
+const escoffier = require('./escoffier');
 
 const Ingredient = z.object({ name: z.string().min(1).max(120), qty: z.number().nonnegative().nullable(), unit: z.enum(['g','ml','tsp','tbsp','x','pinch','']) });
 const Recipe = z.object({
@@ -15,7 +16,8 @@ const Recipe = z.object({
   allergens: z.array(z.enum(UK14)),
   nutritionPerServing: z.object({ kcal: z.number(), proteinG: z.number(), carbsG: z.number(), fatG: z.number() }),
   substitutions: z.array(z.object({ ingredient: z.string(), swap: z.string() })).max(15),
-  tips: z.array(z.string().max(300)).max(10).optional()
+  tips: z.array(z.string().max(300)).max(10).optional(),
+  inspiredBy: z.union([z.string().max(40), z.number()]).nullable().optional()
 });
 const ResponseSchema = z.object({ recipes: z.array(Recipe).min(1).max(5) });
 
@@ -43,8 +45,9 @@ respect ALL dietary filters and exclusions strictly; never exceed the time budge
 for meat/fish/eggs; never suggest unsafe practices (raw flour, pink poultry, honey for babies, wild foraging, washing raw chicken);
 nutrition is an estimate. If kids mode, keep steps simple and mark adult-only steps with "(grown-up job)".`;
 
-function buildUserPrompt(q) {
-  return JSON.stringify({
+const REF_RULE = `\n${escoffier.PRINCIPLES} Add "inspiredBy":"<Escoffier number>"|null to each recipe.`;
+function buildUserPrompt(q, refs) {
+  return JSON.stringify({ ...(refs && refs.length ? { references: refs.map(r => ({ no: r.no, title: r.title, role: r.role, text: r.text })) } : {}),
     include: q.include, exclude: q.exclude, dish: q.dish || null, maxMinutes: q.maxMinutes, difficulty: q.difficulty || 'any',
     servings: q.servings, diets: q.diets, cuisine: q.cuisine || 'any', kidsMode: !!q.kidsMode, count: q.limit || 4
   });
@@ -79,10 +82,10 @@ async function callProvider(c, messages, fetchImpl = fetch) {
   } finally { clearTimeout(t); }
 }
 
-async function generate(q, { fetchImpl, retries = 2 } = {}) {
+async function generate(q, { fetchImpl, retries = 2, references = [] } = {}) {
   const c = config();
   if (!aiEnabled()) return { source: 'offline', recipes: rank(q, { limit: q.limit || 4 }) };
-  const messages = [{ role: 'system', content: SYSTEM }, { role: 'user', content: buildUserPrompt(q) }];
+  const messages = [{ role: 'system', content: SYSTEM + (references.length ? REF_RULE : '') }, { role: 'user', content: buildUserPrompt(q, references) }];
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -91,8 +94,9 @@ async function generate(q, { fetchImpl, retries = 2 } = {}) {
       const recipes = parsed.recipes.filter(r => !isUnsafe(r)).map((r, i) => {
         enforceAllergens(r);
         const ingredients = r.ingredients.map(x => ({ ...x, display: x.qty == null ? x.name : (x.unit === 'x' ? `${x.qty} ${x.name}` : `${x.qty} ${x.unit} ${x.name}`) }));
+        const { inspiredBy, ...rest } = r; const esc = escoffier.cite(r, references);
         return {
-          ...r, id: `ai-${Date.now()}-${i}`, ingredients, baseServings: r.servings,
+          ...rest, ...(esc ? { escoffier: esc } : {}), id: `ai-${Date.now()}-${i}`, ingredients, baseServings: r.servings,
           steps: r.steps.map((s, n) => ({ n: n + 1, ...s })),
           nutritionPerServing: { ...r.nutritionPerServing, isEstimate: true },
           diet: Object.fromEntries((q.diets || []).map(d => [d, true])),

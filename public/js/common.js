@@ -4,11 +4,11 @@
   const theme=localStorage.getItem('lp_theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');
   document.documentElement.dataset.theme=theme;
   const page=location.pathname.replace(/\.html$/,'').replace(/\/$/,'/index');
-  const links=[['/','Home','/index'],['/app.html','AI Chef','/app'],['/pricing.html','Pricing','/pricing'],['/account.html','Account','/account']];
+  const links=[['/','Home','/index'],['/app.html','AI Chef','/app'],['/escoffier.html','Escoffier','/escoffier'],['/pricing.html','Pricing','/pricing'],['/account.html','Account','/account']];
   document.addEventListener('DOMContentLoaded',()=>{
     const h=document.getElementById('site-header');
     if(h)h.innerHTML=`<a class="skip" href="#main">Skip to content</a><header class="nav"><div class="wrap"><a class="brand" href="/">${LOGO}<span>Lux Prime Kitchen<small>AI Chef · Malcolm AI</small></span></a><nav aria-label="Main">${links.map(([u,t,k])=>`<a href="${u}" ${page===k?'aria-current="page"':''}>${t}</a>`).join('')}<button class="icon-btn" id="theme" aria-label="Toggle dark/light theme">${theme==='dark'?'☀':'☾'}</button></nav></div></header>`;
-    const mn=document.createElement('nav');mn.className='mnav';mn.setAttribute('aria-label','Mobile');const ic={'/index':'⌂','/app':'✨','/pricing':'£','/account':'☺'};mn.innerHTML=links.map(([u,t,k])=>`<a href="${u}" ${page===k?'aria-current="page"':''}><span aria-hidden="true">${ic[k]}</span>${t}</a>`).join('');document.body.appendChild(mn);
+    const mn=document.createElement('nav');mn.className='mnav';mn.setAttribute('aria-label','Mobile');const ic={'/index':'⌂','/app':'✨','/escoffier':'📖','/pricing':'£','/account':'☺'};mn.innerHTML=links.map(([u,t,k])=>`<a href="${u}" ${page===k?'aria-current="page"':''}><span aria-hidden="true">${ic[k]}</span>${t}</a>`).join('');document.body.appendChild(mn);
     const f=document.getElementById('site-footer');
     if(f)f.innerHTML=`<footer><div class="wrap row" style="flex-wrap:wrap;align-items:flex-start"><div><strong>Lux Prime Kitchen</strong><br>© ${new Date().getFullYear()} Oliver Thorley. AI Chef powered by Malcolm AI.<br><small>Recipes are guidance. Always check allergen labels; nutrition is estimated.</small></div><div style="text-align:right"><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy & cookies</a> · <a href="/pricing.html">Pricing</a></div></div></footer>`;
     const tb=document.getElementById('theme');

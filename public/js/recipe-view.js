@@ -8,6 +8,7 @@
     const el=document.createElement('article');el.className='card recipe';el.dataset.id=r.id;
     el.innerHTML=`<div class="photo"><img src="${esc(img.large||img.src)}" alt="${esc(img.alt||r.title)}" loading="lazy" decoding="async" ${img.fallback?`data-fallback="${esc(img.fallback)}"`:''}></div>
     <div class="recipe-head"><div style="flex:1;min-width:220px"><h3 style="font-size:1.7rem;margin:0">${esc(r.title)}</h3>
+    ${r.escoffier?`<p style="margin:.35em 0"><a class="pill esc-badge" href="${esc(r.escoffier.url)}" title="Escoffier, A Guide to Modern Cookery (1907)">📖 ${esc(r.escoffier.label)}</a></p>`:''}
     ${r.whyItFits?`<p class="why" style="margin:.3em 0">Why it fits: ${esc(r.whyItFits)}</p>`:''}
     <div class="meta"><span class="pill">⏱ ${esc(r.totalMinutes)} min</span><span class="pill">${esc(r.difficulty)}</span><span class="pill">🍽 serves ${esc(r.servings||r.baseServings)}</span><span class="pill">${esc(r.cuisine)}</span>${Object.entries(r.diet||{}).filter(([,v])=>v).map(([k])=>`<span class="pill">${esc(k)}</span>`).join('')}</div>
     <div class="meta" aria-label="Allergens">${(r.allergens||[]).length?(r.allergens.map(a=>`<span class="pill al">⚠ ${esc(ALN[a]||a)}</span>`).join('')):'<span class="pill">No UK-14 allergens detected</span>'}</div></div>
