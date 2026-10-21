@@ -25,7 +25,7 @@ for (const f of walk(OUT).filter(f => /\.(html|js|css)$/.test(f) && !f.includes(
   let s = rel(fs.readFileSync(f, 'utf8')); const base = path.basename(f);
   if (base === 'common.js') s = s.replace("location.pathname.replace", "('/'+location.pathname.split('/').pop()).replace").replace("if(!csrf())await fetch('/api/csrf');", '');
   if (base === 'recipe-view.js') s = s.replace(/location\.origin/g, 'location.href');
-  if (base === 'app.js') s = s.replace("const quota=()=>{", "const quota=()=>{if(me&&me.static){$('#quota').textContent='Preview edition · unlimited library searches';return}");
+  if (base === 'app.js') s = s.replace("LP.cooking(res,$('#go'))", "LP.cooking(res,$('#go'),{ai:false})").replace("const quota=()=>{", "const quota=()=>{if(me&&me.static){$('#quota').textContent='Preview edition · unlimited library searches';return}");
   if (base.endsWith('.html')) {
     s = s.replace('<script src="js/common.js"></script>', '<script src="js/common.js"></script><script src="js/engine.js"></script><script src="js/static-api.js"></script>');
     s = s.replace(/content="img\//g, `content="${SITE}img/`);

@@ -25,13 +25,13 @@
     if(!me){$('#authDlg').showModal();return}
     const body={include:tags.inc,exclude:tags.exc,dish:$('#dish').value.trim(),maxMinutes:+$('#time').value,difficulty:document.querySelector('[name=diff]:checked').value,servings:+$('#servings').value||2,cuisine:$('#cuisine').value,diets:[...document.querySelectorAll('#diets input:checked')].map(i=>i.value),kidsMode:$('#kids').checked};
     if(!body.include.length&&!body.dish){$('#formErr').textContent='Add at least one ingredient or describe a dish.';show(1);return}
-    const res=$('#results');res.innerHTML='<div class="card empty"><div class="spinner" aria-hidden="true"></div><h2>Your chef is thinking…</h2><p class="muted">Matching ingredients, time and skill.</p></div>';$('#go').disabled=true;
-    try{const d=await api('/api/search',{method:'POST',body});me=d.user;quota();res.innerHTML='';
+    const res=$('#results');const stop=LP.cooking(res,$('#go'));
+    try{const d=await api('/api/search',{method:'POST',body});me=d.user;quota();stop();res.innerHTML='';
       const h=document.createElement('div');h.className='row no-print';h.style.marginBottom='14px';h.innerHTML=`<p class="muted" style="margin:0">${d.recipes.length} recipe${d.recipes.length===1?'':'s'} · ${d.source==='offline'?'Lux Prime curated library':'Malcolm AI'} ${d.fallbackReason?'(AI unavailable — showing library picks)':''}<br><small>${esc(d.disclaimer)}</small></p>`;res.appendChild(h);
       if(!d.recipes.length)res.innerHTML+='<div class="card empty"><div class="big">🤔</div><h2>No perfect match</h2><p class="muted">Try fewer filters, more time, or a different dish description.</p></div>';
-      d.recipes.forEach(r=>res.appendChild(RecipeView.card(r,{premium:me.premium})));
+      d.recipes.forEach((r,i)=>{const el=RecipeView.card(r,{premium:me.premium});if(i===0){const im=el.querySelector('.photo img');if(im){im.loading='eager';im.fetchPriority='high'}}res.appendChild(el)});
       res.scrollIntoView({behavior:'smooth',block:'start'});
-    }catch(err){res.innerHTML=`<div class="card empty"><div class="big">🍳</div><h2>${esc(err.message)}</h2>${err.data&&err.data.upgrade?'<a class="btn" href="/pricing.html">See plans</a>':''}</div>`}
-    finally{$('#go').disabled=false}};
+    }catch(err){stop();res.innerHTML=`<div class="card empty"><div class="big">🍳</div><h2>${esc(err.message)}</h2>${err.data&&err.data.upgrade?'<a class="btn" href="/pricing.html">See plans</a>':''}</div>`}
+    finally{stop()}};
   const q=new URLSearchParams(location.search);if(q.get('i')){inc.add(q.get('i'))}
 })();
