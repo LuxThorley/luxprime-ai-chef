@@ -115,7 +115,7 @@ function createApp({ db = open(), stripe } = {}) {
   // ---- Config / health ----
   app.get('/api/health', (req, res) => res.json({ ok: true, ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!stripe }));
   app.get('/api/plans', (req, res) => res.json({ plans: Object.values(plans()).map(({ priceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(stripe && priceId) })) }));
-  app.get('/api/options', (req, res) => res.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...new Set(require('./recipes').RECIPES.map(r => r.cuisine))].sort() }));
+  app.get('/api/options', (req, res) => res.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set(require('./recipes').RECIPES.map(r => r.cuisine))].sort()] }));
 
   // ---- Search ----
   app.post('/api/search', searchLimiter, needAuth, a(async (req, res) => {

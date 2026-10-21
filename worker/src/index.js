@@ -135,7 +135,7 @@ app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
 app.delete('/api/me', needAuth, async c => { if (isTester(c.get('user'))) return c.json({ error: 'The shared test account can’t be deleted from the site' }, 403); await db(c).prepare('DELETE FROM users WHERE id=?').bind(c.get('user').id).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/health', c => c.json({ ok: true, runtime: 'cloudflare-workers', ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!c.env.STRIPE_SECRET_KEY }));
 app.get('/api/plans', c => { const s = !!c.env.STRIPE_SECRET_KEY; return c.json({ plans: Object.values(plans()).map(({ priceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(s && priceId) })) }); });
-app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...new Set(RECIPES.map(r => r.cuisine))].sort() }));
+app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set(RECIPES.map(r => r.cuisine))].sort()] }));
 
 app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   const p = SearchSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);

@@ -104,3 +104,4 @@ test('change password: needs current password, enforces length, then new passwor
   assert.equal((await ag.post('/api/auth/login').set('x-csrf-token', t).send({ email: 'pw@example.com', password: 'brandnew123' })).status, 200);
   const anon = agent(); const t2 = await csrf(anon.ag); assert.equal((await anon.ag.post('/api/auth/password').set('x-csrf-token', t2).send({ currentPassword: 'x', newPassword: 'yyyyyyyy' })).status, 401);
 });
+test('options: "any" cuisine is first so searches default to any cuisine', async () => { const { ag } = agent(); const o = await ag.get('/api/options'); assert.equal(o.body.cuisines[0], 'any'); });
