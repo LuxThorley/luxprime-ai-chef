@@ -8,6 +8,7 @@ import plansMod from '../../src/plans.js';
 import recipesMod from '../../src/recipes.js';
 import imagesMod from '../../src/images.js';
 import escoffier from '../../src/escoffier.js';
+import dishimage from '../../src/dishimage.js';
 import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSafeEqualStr } from './crypto.js';
 import { stripeApi } from './stripe.js';
 
@@ -147,7 +148,17 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   const fetchImpl = (url, opts) => (c.env.MALCOLM && mBase && String(url).startsWith(mBase)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
   let references = []; try { references = await escoffier.references(d1all(c), q, { pinned: q.escoffier }); } catch (e) { console.error('escoffier', e && e.message); }
   const out = await ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1), references });
-  const recipes = out.recipes.map(r => ({ ...r, image: imagesMod.curatedImage(r), safetyNotes: safetyNotes(r, q) }));
+  let recipes = out.recipes.map(r => ({ ...r, image: imagesMod.curatedImage(r), safetyNotes: safetyNotes(r, q) }));
+  // AI dishes get an AI photo, generated lazily by GET /api/dish-image/:key (never blocks the recipe text).
+  if (out.source !== 'offline' && c.env.IMAGES && c.env.AI) {
+    try {
+      recipes = await Promise.all(recipes.map(async r => {
+        const key = await dishimage.imageKey(r); const fb = r.image; const alt = dishimage.altText(r);
+        await db(c).prepare('INSERT OR IGNORE INTO dish_images(key,title,prompt,alt) VALUES(?,?,?,?)').bind(key, String(r.title).slice(0, 140), dishimage.buildPrompt(r), alt).run();
+        return { ...r, image: { src: `/api/dish-image/${key}`, large: `/api/dish-image/${key}`, og: fb.og, alt, ai: true, key, fallback: fb.large } };
+      }));
+    } catch (e) { console.error('dish-image prep', e && e.message); }
+  }
   await db(c).batch([
     db(c).prepare('UPDATE users SET searches_used = searches_used + 1 WHERE id=?').bind(u.id),
     db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify(p.data), recipes.map(r => r.title).join(' · '))]);
@@ -176,6 +187,43 @@ app.post('/api/share', needAuth, async c => {
   return c.json({ id, url: `${appUrl(c)}/r/${id}` }, 201);
 });
 app.get('/api/share/:id', async c => { const r = await db(c).prepare('SELECT recipe_json FROM shares WHERE id=?').bind(c.req.param('id').slice(0, 20)).first(); return r ? c.json({ recipe: JSON.parse(r.recipe_json) }) : c.json({ error: 'Not found' }, 404); });
+// ---- AI dish photos (KV-cached in IMAGES; generation needs a signed-in user within daily caps) ----
+const IMG_MODEL = '@cf/black-forest-labs/flux-1-schnell';
+const imgInflight = new Map();
+const imgFallback = (c, row) => { const r = c.redirect(imagesMod.curatedImage({ title: row ? row.title : '' }).large, 302); r.headers.set('Cache-Control', 'no-store'); return r; };
+async function makeDishImage(env, row) {
+  const t0 = Date.now(); let bytes, provider;
+  // Workers AI FLUX.1 schnell (Gemini image models are not on the free tier for this key: 429 quota 0).
+  const out = await env.AI.run(IMG_MODEL, { prompt: row.prompt, steps: +env.IMAGE_STEPS || 6 });
+  const b64 = out && out.image; if (!b64) throw new Error('no image');
+  bytes = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)); provider = 'workers-ai/flux-1-schnell';
+  if (bytes.length < 2000 || bytes.length > 6e6) throw new Error('bad image size');
+  await env.IMAGES.put(`dish/${row.key}.jpg`, bytes, { metadata: { provider, title: String(row.title || '').slice(0, 120) } }); // KV (R2 not enabled on the account)
+  await env.DB.prepare("UPDATE dish_images SET status='done', provider=?, ms=?, error=NULL, updated_at=CURRENT_TIMESTAMP WHERE key=?").bind(provider, Date.now() - t0, row.key).run();
+  return bytes;
+}
+app.get('/api/dish-image/:key', async c => {
+  const key = c.req.param('key'); if (!/^[0-9a-f]{32}$/.test(key)) return c.json({ error: 'Not found' }, 404);
+  const serve = (body, extra = {}) => new Response(body, { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff', ...extra } });
+  if (!c.env.IMAGES) return imgFallback(c, null);
+  const hit = await c.env.IMAGES.get(`dish/${key}.jpg`, 'arrayBuffer'); if (hit) return serve(hit);
+  const row = await db(c).prepare('SELECT * FROM dish_images WHERE key=?').bind(key).first(); if (!row) return imgFallback(c, null);
+  const u = c.get('user'); if (!u || !c.env.AI) return imgFallback(c, row);
+  if (await limited(c, 'img', 15, 60)) return imgFallback(c, row);
+  const tier = isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : isPremium(u) ? 'member' : 'free'; const cap = dishimage.DAILY_CAPS[tier]; const day = new Date().toISOString().slice(0, 10);
+  const used = await db(c).prepare('SELECT n FROM image_usage WHERE user_id=? AND day=?').bind(u.id, day).first();
+  if (!imgInflight.has(key) && used && used.n >= cap) return imgFallback(c, row);
+  try {
+    let p = imgInflight.get(key);
+    if (!p) { p = makeDishImage(c.env, row).finally(() => imgInflight.delete(key)); imgInflight.set(key, p);
+      await db(c).prepare('INSERT INTO image_usage(user_id,day,n) VALUES(?,?,1) ON CONFLICT(user_id,day) DO UPDATE SET n=n+1').bind(u.id, day).run(); }
+    return serve(await p);
+  } catch (e) {
+    console.error('dish-image', e && e.message);
+    await db(c).prepare("UPDATE dish_images SET status='failed', error=?, updated_at=CURRENT_TIMESTAMP WHERE key=?").bind(String(e && e.message || e).slice(0, 200), key).run();
+    return imgFallback(c, row);
+  }
+});
 app.get('/api/dish-image', c => c.redirect(imagesMod.curatedImage({ title: String(c.req.query('title') || '').slice(0, 120) }).large, 302));
 
 const escH = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));

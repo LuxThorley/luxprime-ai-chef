@@ -6,7 +6,7 @@
   function card(r,{actions=true,premium=false,shareId=null}={}){
     const img=r.image||{src:'/img/ingredients-sm.webp',alt:r.title};
     const el=document.createElement('article');el.className='card recipe';el.dataset.id=r.id;
-    el.innerHTML=`<div class="photo"><img src="${esc(img.large||img.src)}" alt="${esc(img.alt||r.title)}" loading="lazy" decoding="async" ${img.fallback?`data-fallback="${esc(img.fallback)}"`:''}></div>
+    el.innerHTML=`<div class="photo${img.ai?' shimmer':''}"><img src="${esc(img.large||img.src)}" alt="${esc(img.alt||r.title)}" loading="lazy" decoding="async" ${img.fallback?`data-fallback="${esc(img.fallback)}"`:''}></div>
     <div class="recipe-head"><div style="flex:1;min-width:220px"><h3 style="font-size:1.7rem;margin:0">${esc(r.title)}</h3>
     ${r.escoffier?`<p style="margin:.35em 0"><a class="pill esc-badge" href="${esc(r.escoffier.url)}" title="Escoffier, A Guide to Modern Cookery (1907)">📖 ${esc(r.escoffier.label)}</a></p>`:''}
     ${r.tagline?`<p class="why tagline" style="margin:.3em 0;font-style:italic">${esc(r.tagline)}</p>`:r.whyItFits?`<p class="why" style="margin:.3em 0">Why it fits: ${esc(r.whyItFits)}</p>`:''}
@@ -24,7 +24,7 @@
     ${(r.safetyNotes||[]).length?`<div class="note"><strong>Food safety</strong><ul style="margin:.3em 0 0;padding-left:18px">${r.safetyNotes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul></div>`:''}</div></div>
     ${actions?`<div class="actions no-print">${premium?'<button class="btn sm" data-act="fav">♥ Save</button>':'<a class="btn ghost sm" href="/pricing.html" title="Premium feature">♥ Save (Premium)</a>'}
       <button class="btn ghost sm" data-act="print">🖨 Print</button><button class="btn ghost sm" data-act="pdf">⬇ PDF</button><button class="btn ghost sm" data-act="card">🖼 Image card</button><button class="btn ghost sm" data-act="share" aria-expanded="false">↗ Share</button></div><div class="share-row no-print" hidden style="margin-top:10px"></div>`:''}`;
-    const im=el.querySelector('.photo img');im.addEventListener('error',()=>{if(im.dataset.fallback&&im.src.indexOf(im.dataset.fallback)<0)im.src=im.dataset.fallback},{once:false});
+    const im=el.querySelector('.photo img');if(img.ai){const ph=el.querySelector('.photo');const done=()=>ph.classList.remove('shimmer');im.addEventListener('load',done);im.addEventListener('error',done);if(im.complete&&im.naturalWidth)done()}im.addEventListener('error',()=>{if(im.dataset.fallback&&im.src.indexOf(im.dataset.fallback)<0)im.src=im.dataset.fallback},{once:false});
     el.querySelectorAll('.timer').forEach(b=>b.onclick=()=>timer(b));
     if(actions){
       el.querySelector('[data-act=print]').onclick=()=>{el.classList.add('printing');window.print();setTimeout(()=>el.classList.remove('printing'),500)};
@@ -90,3 +90,4 @@
   }
   window.RecipeView={card,pdf,imageCard};
 })();
+/* dish-images v2 */

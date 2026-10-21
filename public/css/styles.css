@@ -85,3 +85,11 @@ body{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/20
 .pill.esc-badge{display:inline-block;text-decoration:none;color:var(--gold);border-color:color-mix(in srgb,var(--gold) 60%,transparent);background:color-mix(in srgb,var(--gold) 10%,transparent)}
 .esc-about ul{padding-left:18px;line-height:1.55}.esc-about li{margin:.35em 0}
 .card.blessing{margin:0 0 14px;padding:16px 22px;border-left:3px solid var(--gold)}.chef-secret{margin-top:12px}
+
+/* AI dish photo placeholder */
+.photo.shimmer{background:linear-gradient(100deg,var(--bg2) 30%,color-mix(in srgb,var(--gold) 14%,var(--bg2)) 50%,var(--bg2) 70%);background-size:300% 100%;animation:lp-shimmer 1.6s linear infinite}
+.photo.shimmer img{opacity:0}.photo img{transition:transform .6s ease,opacity .5s ease}
+.photo.shimmer:after{content:"Plating your photo…";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--mute);font-size:.85rem;letter-spacing:.04em}
+@keyframes lp-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+@media (prefers-reduced-motion:reduce){.photo.shimmer{animation:none}}
+/* dish-images v2 */
