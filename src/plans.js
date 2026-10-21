@@ -10,5 +10,8 @@ function plans() {
 // Admin = an account whose email is listed in the server-side ADMIN_EMAILS var (comma-separated). Never client-controlled.
 const adminEmails = () => String(process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 const isAdmin = u => !!u && !!u.email && adminEmails().includes(String(u.email).trim().toLowerCase());
-const isPremium = u => !!u && (isAdmin(u) || (u.plan !== 'free' && ['active', 'trialing'].includes(u.sub_status)));
-module.exports = { plans, isPremium, isAdmin };
+// Testers = shared friends-and-family account(s) listed in server-side TESTER_EMAILS: all member features, never admin.
+const testerEmails = () => String(process.env.TESTER_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+const isTester = u => !!u && !!u.email && !isAdmin(u) && testerEmails().includes(String(u.email).trim().toLowerCase());
+const isPremium = u => !!u && (isAdmin(u) || isTester(u) || (u.plan !== 'free' && ['active', 'trialing'].includes(u.sub_status)));
+module.exports = { plans, isPremium, isAdmin, isTester };

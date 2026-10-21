@@ -83,3 +83,24 @@ test('admin: unset ADMIN_EMAILS grants nobody admin', () => {
   try { assert.equal(isAdmin({ email: 'owner@example.com', plan: 'free' }), false); assert.equal(isPremium({ email: '', plan: 'free' }), false); assert.equal(isAdmin(null), false); }
   finally { if (prev !== undefined) process.env.ADMIN_EMAILS = prev; }
 });
+
+test('tester: TESTER_EMAILS account gets full member access but not admin; cannot be deleted', async () => {
+  const pa = process.env.ADMIN_EMAILS, pt = process.env.TESTER_EMAILS; process.env.ADMIN_EMAILS = 'owner@example.com'; process.env.TESTER_EMAILS = 'Test@Example.chef';
+  try {
+    const { ag } = agent(); const t = await signup(ag, 'test@example.chef');
+    const me = (await ag.get('/api/me')).body.user; assert.equal(me.tester, true); assert.equal(me.admin, false); assert.equal(me.premium, true); assert.equal(me.plan, 'tester');
+    for (let i = 0; i < 4; i++) { const r = await ag.post('/api/search').set('x-csrf-token', t).send({ dish: 'soup' }); assert.equal(r.status, 200); }
+    assert.equal((await ag.get('/api/favourites')).status, 200); assert.equal((await ag.get('/api/history')).status, 200);
+    assert.equal((await ag.delete('/api/me').set('x-csrf-token', t)).status, 403);
+    const { isTester, isAdmin } = require('../src/plans'); assert.equal(isTester({ email: 'owner@example.com' }), false); assert.equal(isAdmin({ email: 'test@example.chef' }), false);
+  } finally { for (const [k, v] of [['ADMIN_EMAILS', pa], ['TESTER_EMAILS', pt]]) if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+});
+test('change password: needs current password, enforces length, then new password works', async () => {
+  const { ag } = agent(); const t = await signup(ag, 'pw@example.com');
+  assert.equal((await ag.post('/api/auth/password').set('x-csrf-token', t).send({ currentPassword: 'wrongpass1', newPassword: 'brandnew123' })).status, 401);
+  assert.equal((await ag.post('/api/auth/password').set('x-csrf-token', t).send({ currentPassword: 'supersecret1', newPassword: 'short' })).status, 400);
+  assert.equal((await ag.post('/api/auth/password').set('x-csrf-token', t).send({ currentPassword: 'supersecret1', newPassword: 'brandnew123' })).status, 200);
+  assert.equal((await ag.post('/api/auth/login').set('x-csrf-token', t).send({ email: 'pw@example.com', password: 'supersecret1' })).status, 401);
+  assert.equal((await ag.post('/api/auth/login').set('x-csrf-token', t).send({ email: 'pw@example.com', password: 'brandnew123' })).status, 200);
+  const anon = agent(); const t2 = await csrf(anon.ag); assert.equal((await anon.ag.post('/api/auth/password').set('x-csrf-token', t2).send({ currentPassword: 'x', newPassword: 'yyyyyyyy' })).status, 401);
+});

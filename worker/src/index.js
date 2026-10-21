@@ -11,7 +11,7 @@ import escoffier from '../../src/escoffier.js';
 import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSafeEqualStr } from './crypto.js';
 import { stripeApi } from './stripe.js';
 
-const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin } = plansMod; const { UK14, RECIPES } = recipesMod;
+const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
@@ -29,7 +29,7 @@ const SESSION_DAYS = 30;
 const app = new Hono();
 const appUrl = c => (c.env.APP_URL || new URL(c.req.url).origin).replace(/\/$/, '');
 const db = c => c.env.DB;
-const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : u.plan, admin: isAdmin(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
 const bad = (c, e) => c.json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' }, 400);
 
 // Expose string bindings to the shared Node modules (ai.js / plans.js read process.env).
@@ -122,7 +122,17 @@ app.post('/api/auth/login', rl('auth', 20, 900), async c => {
 });
 app.post('/api/auth/logout', async c => { const sid = getCookie(c, 'lp_session'); if (sid) await db(c).prepare('DELETE FROM sessions WHERE id=?').bind(sid).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/me', c => c.json({ user: publicUser(c.get('user')) || null }));
-app.delete('/api/me', needAuth, async c => { await db(c).prepare('DELETE FROM users WHERE id=?').bind(c.get('user').id).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
+const PwSchema = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200) });
+app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
+  const p = PwSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
+  const u = c.get('user'); if (!(await verifyPassword(p.data.currentPassword, u.password_hash))) return c.json({ error: 'Current password is incorrect' }, 401);
+  if (p.data.newPassword === p.data.currentPassword) return c.json({ error: 'Choose a different new password' }, 400);
+  const sid = getCookie(c, 'lp_session');
+  await db(c).batch([db(c).prepare('UPDATE users SET password_hash=? WHERE id=?').bind(await hashPassword(p.data.newPassword), u.id),
+    db(c).prepare('DELETE FROM sessions WHERE user_id=? AND id<>?').bind(u.id, sid || '')]); // sign out every other device
+  return c.json({ ok: true });
+});
+app.delete('/api/me', needAuth, async c => { if (isTester(c.get('user'))) return c.json({ error: 'The shared test account can’t be deleted from the site' }, 403); await db(c).prepare('DELETE FROM users WHERE id=?').bind(c.get('user').id).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/health', c => c.json({ ok: true, runtime: 'cloudflare-workers', ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!c.env.STRIPE_SECRET_KEY }));
 app.get('/api/plans', c => { const s = !!c.env.STRIPE_SECRET_KEY; return c.json({ plans: Object.values(plans()).map(({ priceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(s && priceId) })) }); });
 app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...new Set(RECIPES.map(r => r.cuisine))].sort() }));

@@ -5,7 +5,7 @@ const express = require('express'); const helmet = require('helmet'); const rate
 const cookieParser = require('cookie-parser'); const bcrypt = require('bcryptjs'); const jwt = require('jsonwebtoken');
 const { z } = require('zod');
 const { open } = require('./db'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
-const { plans, isPremium, isAdmin } = require('./plans'); const images = require('./images');
+const { plans, isPremium, isAdmin, isTester } = require('./plans'); const images = require('./images');
 const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14 } = require('./recipes');
 
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
@@ -84,7 +84,7 @@ function createApp({ db = open(), stripe } = {}) {
   });
   const needAuth = (req, res, next) => req.user ? next() : res.status(401).json({ error: 'Please sign in' });
   const needPremium = (req, res, next) => isPremium(req.user) ? next() : res.status(402).json({ error: 'This is a premium feature — upgrade to unlock', upgrade: '/pricing.html' });
-  const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : u.plan, admin: isAdmin(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+  const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
   const bad = (res, e) => res.status(400).json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' });
 
   app.post('/api/auth/register', authLimiter, a(async (req, res) => {
@@ -103,7 +103,14 @@ function createApp({ db = open(), stripe } = {}) {
   }));
   app.post('/api/auth/logout', (req, res) => { res.clearCookie('lp_session', { path: '/' }); res.json({ ok: true }); });
   app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null }));
-  app.delete('/api/me', needAuth, (req, res) => { db.prepare('DELETE FROM users WHERE id=?').run(req.user.id); res.clearCookie('lp_session', { path: '/' }); res.json({ ok: true }); });
+  const PwSchema = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200) });
+  app.post('/api/auth/password', authLimiter, needAuth, a(async (req, res) => {
+    const p = PwSchema.safeParse(req.body); if (!p.success) return bad(res, p.error);
+    if (!(await bcrypt.compare(p.data.currentPassword, req.user.password_hash))) return res.status(401).json({ error: 'Current password is incorrect' });
+    if (p.data.newPassword === p.data.currentPassword) return res.status(400).json({ error: 'Choose a different new password' });
+    db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(await bcrypt.hash(p.data.newPassword, 12), req.user.id); res.json({ ok: true });
+  }));
+  app.delete('/api/me', needAuth, (req, res) => { if (isTester(req.user)) return res.status(403).json({ error: 'The shared test account can’t be deleted from the site' }); db.prepare('DELETE FROM users WHERE id=?').run(req.user.id); res.clearCookie('lp_session', { path: '/' }); res.json({ ok: true }); });
 
   // ---- Config / health ----
   app.get('/api/health', (req, res) => res.json({ ok: true, ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!stripe }));
