@@ -48,3 +48,9 @@ test('API: /api/escoffier browse + entry endpoints are public', async () => {
   const b = await ag.get('/api/escoffier?page=1'); assert.equal(b.body.entries.length, 24); assert.equal(b.body.sections.length, 23);
   assert.equal((await ag.get('/api/escoffier/28')).body.entry.no, '28'); assert.equal((await ag.get('/api/escoffier/nope')).status, 404);
 });
+test('About Escoffier page exists, is linked from nav + Classics, and frames the honorific carefully', () => {
+  const fs = require('fs'); const page = fs.readFileSync(__dirname + '/../public/about-escoffier.html', 'utf8');
+  for (const k of ['1846', 'Villeneuve-Loubet', 'Savoy', 'Carlton', 'Légion d’honneur', 'Guide Culinaire', 'Pêche Melba', 'brigade', 'honorific']) assert.ok(page.includes(k), k);
+  assert.ok(fs.readFileSync(__dirname + '/../public/js/common.js', 'utf8').includes('/about-escoffier.html'));
+  assert.ok(fs.readFileSync(__dirname + '/../public/escoffier.html', 'utf8').includes('/about-escoffier.html'));
+});
