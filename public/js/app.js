@@ -28,8 +28,11 @@
     const res=$('#results');const stop=LP.cooking(res,$('#go'));
     try{const d=await api('/api/search',{method:'POST',body});me=d.user;quota();stop();res.innerHTML='';
       const h=document.createElement('div');h.className='row no-print';h.style.marginBottom='14px';h.innerHTML=`<p class="muted" style="margin:0">${d.recipes.length} recipe${d.recipes.length===1?'':'s'} · ${d.source==='offline'?'Lux Prime curated library':'Malcolm AI'} ${d.fallbackReason?'(AI unavailable — showing library picks)':''}<br><small>${esc(d.disclaimer)}</small></p>`;res.appendChild(h);
+      if(d.blessing){const b=document.createElement('div');b.className='card blessing';b.innerHTML=`<p style="margin:0;font-family:var(--serif);font-size:1.15rem;font-style:italic">${esc(d.blessing)}</p>`;res.appendChild(b)}
+      if(d.meta&&me&&me.admin){const m=document.createElement('p');m.className='muted no-print';m.style.fontSize='.8rem';m.textContent=`Admin · provider: ${d.meta.provider||'?'} · ${d.meta.model||''}${d.meta.failovers?` · ${d.meta.failovers} failover(s)`:''}`;res.appendChild(m)}
       if(!d.recipes.length)res.innerHTML+='<div class="card empty"><div class="big">🤔</div><h2>No perfect match</h2><p class="muted">Try fewer filters, more time, or a different dish description.</p></div>';
       d.recipes.forEach((r,i)=>{const el=RecipeView.card(r,{premium:me.premium});if(i===0){const im=el.querySelector('.photo img');if(im){im.loading='eager';im.fetchPriority='high'}}res.appendChild(el)});
+      if(d.closing){const c=document.createElement('div');c.className='card blessing';c.innerHTML=`<p style="margin:0;font-family:var(--serif);font-style:italic">${esc(d.closing)}</p>`;res.appendChild(c)}
       res.scrollIntoView({behavior:'smooth',block:'start'});
     }catch(err){stop();res.innerHTML=`<div class="card empty"><div class="big">🍳</div><h2>${esc(err.message)}</h2>${err.data&&err.data.upgrade?'<a class="btn" href="/pricing.html">See plans</a>':''}</div>`}
     finally{stop()}};

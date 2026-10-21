@@ -17,9 +17,10 @@ const Recipe = z.object({
   nutritionPerServing: z.object({ kcal: z.number(), proteinG: z.number(), carbsG: z.number(), fatG: z.number() }),
   substitutions: z.array(z.object({ ingredient: z.string(), swap: z.string() })).max(15),
   tips: z.array(z.string().max(300)).max(10).optional(),
-  inspiredBy: z.union([z.string().max(40), z.number()]).nullable().optional()
+  inspiredBy: z.union([z.string().max(40), z.number()]).nullable().optional(),
+  tagline: z.string().max(200).optional(), chefSecret: z.string().max(400).optional(), pairing: z.string().max(300).optional(), nutritionPartial: z.boolean().optional()
 });
-const ResponseSchema = z.object({ recipes: z.array(Recipe).min(1).max(5) });
+const ResponseSchema = z.object({ recipes: z.array(Recipe).min(1).max(5), blessing: z.string().max(600).nullable().optional(), closing: z.string().max(600).nullable().optional(), provider: z.string().max(40).optional(), model: z.string().max(80).optional(), failovers: z.array(z.any()).optional() });
 
 function config() {
   const p = (process.env.AI_PROVIDER || 'none').toLowerCase();
@@ -104,7 +105,7 @@ async function generate(q, { fetchImpl, retries = 2, references = [] } = {}) {
         };
       });
       if (!recipes.length) throw new Error('All AI recipes failed safety checks');
-      return { source: c.provider, recipes };
+      return { source: c.provider, recipes, blessing: parsed.blessing || null, closing: parsed.closing || null, meta: { provider: parsed.provider || null, model: parsed.model || null, failovers: (parsed.failovers || []).length } };
     } catch (e) {
       lastErr = e;
       messages.push({ role: 'user', content: `Your previous reply was invalid (${String(e.message).slice(0, 300)}). Reply again with ONLY valid JSON matching the schema.` });

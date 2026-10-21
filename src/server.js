@@ -135,7 +135,7 @@ function createApp({ db = open(), stripe } = {}) {
     db.prepare('UPDATE users SET searches_used = searches_used + 1 WHERE id=?').run(u.id);
     db.prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').run(u.id, JSON.stringify(p.data), recipes.map(r => r.title).join(' · '));
     const fresh = db.prepare('SELECT * FROM users WHERE id=?').get(u.id);
-    res.json({ source: out.source, fallbackReason: out.fallbackReason, disclaimer: DISCLAIMER, recipes, user: publicUser(fresh) });
+    res.json({ source: out.source, fallbackReason: out.fallbackReason, disclaimer: DISCLAIMER, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
   }));
 
   // ---- Escoffier Classics (public domain, 1907) ----

@@ -20,3 +20,16 @@ test('malcolm recipes mode: accepts valid AI recipes', async () => {
   assert.equal(out.source, 'malcolm'); assert.equal(out.recipes[0].title, 'Garlic Chicken Rice'); assert.equal(out.recipes[0].source, 'Malcolm AI');
   for (const k of ['AI_PROVIDER', 'MALCOLM_AI_URL', 'MALCOLM_AI_MODE']) delete process.env[k];
 });
+test('malcolm: blessing/closing, chef extras and partial nutrition pass through; citation still validated', async () => {
+  process.env.AI_PROVIDER = 'malcolm'; process.env.MALCOLM_AI_URL = 'https://example.invalid/'; process.env.MALCOLM_AI_MODE = 'lattice';
+  delete require.cache[require.resolve('../src/ai')]; const ai = require('../src/ai');
+  const r = { title: 'Poulet Sauté', cuisine: 'Escoffier-inspired', difficulty: 'medium', totalMinutes: 40, servings: 2, matchScore: 96, whyItFits: 'Simple.', tagline: 'Simple.', chefSecret: 'Deglaze.', pairing: 'Chablis', nutritionPartial: true, inspiredBy: '9999',
+    ingredients: [{ name: 'chicken', qty: 4, unit: 'x' }, { name: 'mushrooms', qty: 200, unit: 'g' }], steps: [{ text: 'Brown.', timerMinutes: 8 }, { text: 'Cook to 75C.', timerMinutes: null }], allergens: [],
+    nutritionPerServing: { kcal: 520, proteinG: 42, carbsG: 0, fatG: 0 }, substitutions: [] };
+  const out = await ai.generate({ include: ['chicken'], maxMinutes: 45, servings: 2, diets: [] }, { references: [{ no: '1540', title: 'POULET SAUTÉ BRETONNE', text: 't' }], retries: 0,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ recipes: [r], blessing: 'Welcome.', closing: 'Farewell.', provider: 'gemini', model: 'gemini-2.5-flash', failovers: [] }) }) });
+  assert.equal(out.blessing, 'Welcome.'); assert.equal(out.closing, 'Farewell.'); assert.equal(out.meta.provider, 'gemini');
+  const x = out.recipes[0]; assert.equal(x.chefSecret, 'Deglaze.'); assert.equal(x.pairing, 'Chablis'); assert.equal(x.tagline, 'Simple.'); assert.ok(x.nutritionPartial);
+  assert.ok(!x.escoffier, 'invented citation number must be dropped');
+  for (const k of ['AI_PROVIDER', 'MALCOLM_AI_URL', 'MALCOLM_AI_MODE']) delete process.env[k];
+});

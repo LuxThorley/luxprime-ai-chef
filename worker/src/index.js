@@ -152,7 +152,7 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
     db(c).prepare('UPDATE users SET searches_used = searches_used + 1 WHERE id=?').bind(u.id),
     db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify(p.data), recipes.map(r => r.title).join(' · '))]);
   const fresh = await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first();
-  return c.json({ source: out.source, fallbackReason: out.fallbackReason, disclaimer: DISCLAIMER, recipes, user: publicUser(fresh) });
+  return c.json({ source: out.source, fallbackReason: out.fallbackReason, disclaimer: DISCLAIMER, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
 });
 
 // Escoffier Classics (public domain, 1907) — browse/search + single entry.
