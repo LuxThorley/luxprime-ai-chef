@@ -5,7 +5,7 @@ const express = require('express'); const helmet = require('helmet'); const rate
 const cookieParser = require('cookie-parser'); const bcrypt = require('bcryptjs'); const jwt = require('jsonwebtoken');
 const { z } = require('zod');
 const { open } = require('./db'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
-const { plans, isPremium } = require('./plans'); const images = require('./images');
+const { plans, isPremium, isAdmin } = require('./plans'); const images = require('./images');
 const fsx = require('fs'); const { UK14 } = require('./recipes');
 
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
@@ -83,7 +83,7 @@ function createApp({ db = open(), stripe } = {}) {
   });
   const needAuth = (req, res, next) => req.user ? next() : res.status(401).json({ error: 'Please sign in' });
   const needPremium = (req, res, next) => isPremium(req.user) ? next() : res.status(402).json({ error: 'This is a premium feature — upgrade to unlock', upgrade: '/pricing.html' });
-  const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: u.plan, subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+  const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : u.plan, admin: isAdmin(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
   const bad = (res, e) => res.status(400).json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' });
 
   app.post('/api/auth/register', authLimiter, a(async (req, res) => {

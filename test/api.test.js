@@ -64,3 +64,22 @@ test('AI layer: validates JSON, retries on bad output, enforces allergens', asyn
   assert.equal(bad.source, 'offline'); assert.ok(bad.fallbackReason);
   process.env.AI_PROVIDER = 'none';
 });
+
+test('admin: ADMIN_EMAILS account is unlimited with all premium features; others are not', async () => {
+  const prev = process.env.ADMIN_EMAILS; process.env.ADMIN_EMAILS = 'Owner@Example.com';
+  try {
+    const { ag } = agent(); const t = await signup(ag, 'owner@example.com');
+    const me = (await ag.get('/api/me')).body.user; assert.equal(me.admin, true); assert.equal(me.premium, true); assert.equal(me.plan, 'admin'); assert.equal(me.searchesLeft, null);
+    for (let i = 0; i < 5; i++) assert.equal((await ag.post('/api/search').set('x-csrf-token', t).send({ dish: 'soup' })).status, 200);
+    assert.equal((await ag.get('/api/favourites')).status, 200); assert.equal((await ag.get('/api/history')).status, 200);
+    const o = agent(); const t2 = await signup(o.ag, 'someone@example.com');
+    const r = await o.ag.post('/api/auth/register').set('x-csrf-token', t2).send({ email: 'x@example.com', password: 'supersecret1', admin: true, plan: 'admin' });
+    assert.equal(r.body.user.admin, false); assert.equal(r.body.user.premium, false);
+    assert.equal((await o.ag.get('/api/favourites')).status, 402);
+  } finally { if (prev === undefined) delete process.env.ADMIN_EMAILS; else process.env.ADMIN_EMAILS = prev; }
+});
+test('admin: unset ADMIN_EMAILS grants nobody admin', () => {
+  const { isAdmin, isPremium } = require('../src/plans'); const prev = process.env.ADMIN_EMAILS; delete process.env.ADMIN_EMAILS;
+  try { assert.equal(isAdmin({ email: 'owner@example.com', plan: 'free' }), false); assert.equal(isPremium({ email: '', plan: 'free' }), false); assert.equal(isAdmin(null), false); }
+  finally { if (prev !== undefined) process.env.ADMIN_EMAILS = prev; }
+});

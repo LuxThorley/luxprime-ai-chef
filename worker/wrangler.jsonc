@@ -9,7 +9,7 @@
   "d1_databases": [{ "binding": "DB", "database_name": "luxprime-ai-chef-db", "database_id": "32cc614d-ea54-4188-8d50-f1c85c412a86", "migrations_dir": "migrations" }],
   "services": [{ "binding": "MALCOLM", "service": "malcolmai-live" }],
   "triggers": { "crons": ["17 3 * * *"] },
-  "vars": { "AI_PROVIDER": "malcolm", "MALCOLM_AI_URL": "https://malcolmai-live.oliverluxthorley.workers.dev/", "MALCOLM_AI_MODE": "lattice", "AI_TIMEOUT_MS": "75000", "AI_RETRIES": "0", "IMAGE_PROVIDER": "none" },
+  "vars": { "AI_PROVIDER": "malcolm", "MALCOLM_AI_URL": "https://malcolmai-live.oliverluxthorley.workers.dev/", "MALCOLM_AI_MODE": "lattice", "AI_TIMEOUT_MS": "75000", "AI_RETRIES": "0", "IMAGE_PROVIDER": "none", "ADMIN_EMAILS": "oliverthorley@hotmail.co.uk" },
   "observability": { "enabled": true }
   // Secrets (wrangler secret put / dashboard): MALCOLM_AI_KEY, JWT_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
   // STRIPE_PRICE_MONTHLY, STRIPE_PRICE_FAMILY, APP_URL (optional custom domain)

@@ -13,8 +13,8 @@
   async function view(){if(!user)return authView();
     box.innerHTML=`<section><span class="eyebrow">Your kitchen</span><h2>Hello${user.name?', '+esc(user.name):''} 👋</h2>
     ${q.get('checkout')==='success'?'<p class="note">Thank you! Your subscription is being activated — it can take a few seconds.</p>':''}
-    <div class="grid g3"><div class="card"><h3>Plan</h3><p class="price" style="font-size:1.8rem">${user.premium?(user.plan==='family'?'Family Kitchen':'Chef Monthly'):'Free Trial'}</p><p class="muted">${user.premium?'Unlimited searches':`${user.searchesLeft} free searches left`}</p>
-    ${user.premium?'<button class="btn" id="portal">Manage billing</button>':'<a class="btn" href="/pricing.html">Upgrade</a>'}</div>
+    <div class="grid g3"><div class="card"><h3>Plan</h3><p class="price" style="font-size:1.8rem">${user.admin?'Admin · Unlimited':user.premium?(user.plan==='family'?'Family Kitchen':'Chef Monthly'):'Free Trial'}</p><p class="muted">${user.premium?'Unlimited searches':`${user.searchesLeft} free searches left`}</p>
+    ${user.admin?'<p class="muted">Owner account — all features, no billing.</p>':user.premium?'<button class="btn" id="portal">Manage billing</button>':'<a class="btn" href="/pricing.html">Upgrade</a>'}</div>
     <div class="card"><h3>Account</h3><p class="muted">${esc(user.email)}</p><div class="actions"><button class="btn ghost" id="lo">Sign out</button><button class="btn ghost" id="del">Delete account</button></div></div></div></section>
     <section><h2>♥ Favourites</h2><div id="favs"><p class="muted">${user.premium?'Loading…':'Favourites are a premium feature.'}</p></div></section>
     <section><h2>History</h2><div id="hist"><p class="muted">${user.premium?'Loading…':'Search history is a premium feature.'}</p></div></section>`;

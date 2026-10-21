@@ -10,7 +10,7 @@ import imagesMod from '../../src/images.js';
 import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSafeEqualStr } from './crypto.js';
 import { stripeApi } from './stripe.js';
 
-const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium } = plansMod; const { UK14, RECIPES } = recipesMod;
+const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
@@ -27,7 +27,7 @@ const SESSION_DAYS = 30;
 const app = new Hono();
 const appUrl = c => (c.env.APP_URL || new URL(c.req.url).origin).replace(/\/$/, '');
 const db = c => c.env.DB;
-const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: u.plan, subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : u.plan, admin: isAdmin(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
 const bad = (c, e) => c.json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' }, 400);
 
 // Expose string bindings to the shared Node modules (ai.js / plans.js read process.env).
