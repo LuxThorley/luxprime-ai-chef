@@ -34,6 +34,7 @@
       if(!d.recipes.length)res.innerHTML+='<div class="card empty"><div class="big">🤔</div><h2>No perfect match</h2><p class="muted">Try fewer filters, more time, or a different dish description.</p></div>';
       d.recipes.forEach((r,i)=>{const el=RecipeView.card(r,{premium:me.premium});if(i===0){const im=el.querySelector('.photo img');if(im){im.loading='eager';im.fetchPriority='high'}}res.appendChild(el)});
       if(d.closing){const c=document.createElement('div');c.className='card blessing';c.innerHTML=`<p style="margin:0;font-family:var(--serif);font-style:italic">${esc(d.closing)}</p>`;res.appendChild(c)}
+      if(window.LPMag&&d.recipes.length)LPMag.banner(res).catch(()=>{});
       res.scrollIntoView({behavior:'smooth',block:'start'});
     }catch(err){stop();res.innerHTML=`<div class="card empty"><div class="big">🍳</div><h2>${esc(err.message)}</h2>${err.data&&err.data.upgrade?'<a class="btn" href="/pricing.html">See plans</a>':''}</div>`}
     finally{stop()}};

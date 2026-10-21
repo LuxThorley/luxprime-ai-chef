@@ -1,0 +1,4 @@
+-- Lux Prime Kitchen Magazine add-on (£1.99/mo): entitlement + opt-in (UK GDPR: off until the reader turns it on) and issue log.
+CREATE TABLE IF NOT EXISTS magazine_subs (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT 'none', opt_in INTEGER NOT NULL DEFAULT 0, opt_in_at TEXT, opt_out_at TEXT, stripe_subscription_id TEXT, stripe_item_id TEXT, unsub_token TEXT UNIQUE, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS magazine_issues (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, month TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'monthly', status TEXT NOT NULL DEFAULT 'pending', token TEXT, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, bytes INTEGER, ms INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, sent_at TEXT, UNIQUE(user_id, month, kind));
+CREATE INDEX IF NOT EXISTS magazine_issues_status ON magazine_issues(kind, status);

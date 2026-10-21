@@ -93,3 +93,10 @@ body{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/20
 @keyframes lp-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
 @media (prefers-reduced-motion:reduce){.photo.shimmer{animation:none}}
 /* dish-images v2 */
+/* Lux Prime Kitchen Magazine */
+.mag-cover{display:block;border-radius:6px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.55),0 0 0 1px color-mix(in srgb,var(--gold) 35%,transparent);transform:rotate(-1.5deg);transition:transform .4s ease;margin:auto}.mag-cover:hover{transform:rotate(0) scale(1.02)}.mag-cover img{display:block;width:100%;height:auto}
+.mag-feature h2{font-family:var(--serif);font-size:clamp(2rem,4vw,3rem);margin:.3em 0}.mag-list{padding-left:0;list-style:none}.mag-list li{padding:5px 0}.mag-list li:before{content:"— ";color:var(--gold)}
+.mag-card{margin-top:28px;border-color:color-mix(in srgb,var(--gold) 55%,transparent)}.mag-card .split{grid-template-columns:.7fr 1.3fr}
+.mag-banner{display:flex;gap:18px;align-items:center;margin:18px 0;border-color:color-mix(in srgb,var(--gold) 45%,transparent)}.mag-banner img{border-radius:4px;flex:none;box-shadow:0 8px 20px rgba(0,0,0,.4)}
+.mag-acct .split{grid-template-columns:.5fr 1.5fr}.mag-toggle{display:flex;gap:10px;align-items:center;font-weight:600}
+@media(max-width:820px){.mag-card .split,.mag-acct .split{grid-template-columns:1fr}.mag-banner{flex-direction:column;text-align:center}}

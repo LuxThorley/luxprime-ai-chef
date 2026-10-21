@@ -11,6 +11,7 @@ import escoffier from '../../src/escoffier.js';
 import dishimage from '../../src/dishimage.js';
 import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSafeEqualStr } from './crypto.js';
 import { stripeApi } from './stripe.js';
+import * as magW from './magazine.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
@@ -65,6 +66,23 @@ app.post('/api/billing/webhook', async c => {
   await db(c).prepare('INSERT INTO stripe_events(id) VALUES(?)').bind(event.id).run();
   const o = event.data.object; const E = c.env;
   const priceToPlan = pid => pid === E.STRIPE_PRICE_FAMILY ? 'family' : pid === E.STRIPE_PRICE_MONTHLY ? 'monthly' : null;
+  const isMag = pid => !!E.STRIPE_PRICE_MAGAZINE && pid === E.STRIPE_PRICE_MAGAZINE;
+  const magUpsert = (uidSql, uidVal, status, subId, itemId) => db(c).prepare(`INSERT INTO magazine_subs(user_id,status,stripe_subscription_id,stripe_item_id,unsub_token,updated_at) SELECT u.id,?,?,?,?,CURRENT_TIMESTAMP FROM users u WHERE u.id=(${uidSql}) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status, stripe_subscription_id=excluded.stripe_subscription_id, stripe_item_id=COALESCE(excluded.stripe_item_id, stripe_item_id), updated_at=CURRENT_TIMESTAMP`).bind(status, subId, itemId || null, magW.newUnsubToken(), uidVal);
+  // Magazine add-on: standalone subscription (any tier, incl. free) or an extra line item on a membership subscription.
+  if (event.type === 'checkout.session.completed' && o.mode === 'subscription' && o.metadata && o.metadata.plan === 'magazine') {
+    await db(c).batch([db(c).prepare('UPDATE users SET stripe_customer_id=COALESCE(stripe_customer_id, ?) WHERE id=?').bind(o.customer, +o.client_reference_id), magUpsert('?', +o.client_reference_id, 'active', o.subscription)]);
+    return c.json({ received: true });
+  }
+  const items = (o.object === 'subscription' && o.items && o.items.data) || [];
+  const magItem = items.find(i => i.price && isMag(i.price.id));
+  if (magItem || (o.object === 'subscription' && o.metadata && o.metadata.plan === 'magazine')) {
+    const del = event.type.endsWith('deleted'); const mStatus = del ? 'canceled' : o.status;
+    await magUpsert('SELECT id FROM users WHERE stripe_customer_id=?', o.customer, mStatus, o.id, magItem && magItem.id).run();
+    if (!items.some(i => i.price && !isMag(i.price.id))) return c.json({ received: true }); // standalone magazine sub: membership untouched
+  } else if (o.object === 'subscription' && event.type !== 'customer.subscription.created') {
+    // Membership sub without the magazine item: if the add-on lived on this sub, it has been removed.
+    await db(c).prepare("UPDATE magazine_subs SET status='canceled', updated_at=CURRENT_TIMESTAMP WHERE stripe_subscription_id=? AND stripe_item_id IS NOT NULL").bind(o.id).run();
+  }
   if (event.type === 'checkout.session.completed' && o.mode === 'subscription') {
     const plan = (o.metadata && o.metadata.plan) || 'monthly';
     await db(c).batch([
@@ -72,7 +90,7 @@ app.post('/api/billing/webhook', async c => {
       db(c).prepare('INSERT OR REPLACE INTO subscriptions(id,user_id,customer_id,plan,status,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)').bind(o.subscription, +o.client_reference_id, o.customer, plan, 'active')]);
   } else if (['customer.subscription.updated','customer.subscription.created','customer.subscription.deleted'].includes(event.type)) {
     const del = event.type.endsWith('deleted');
-    const plan = del ? 'free' : (priceToPlan(o.items && o.items.data[0] && o.items.data[0].price.id) || 'monthly'); const status = del ? 'canceled' : o.status;
+    const main = items.find(i => i.price && !isMag(i.price.id)); const plan = del ? 'free' : (priceToPlan(main && main.price.id) || 'monthly'); const status = del ? 'canceled' : o.status;
     await db(c).batch([
       db(c).prepare('UPDATE users SET plan=?, sub_status=?, stripe_subscription_id=? WHERE stripe_customer_id=?').bind(plan, status, o.id, o.customer),
       db(c).prepare('INSERT OR REPLACE INTO subscriptions(id,user_id,customer_id,plan,status,current_period_end,updated_at) VALUES(?,(SELECT id FROM users WHERE stripe_customer_id=?),?,?,?,?,CURRENT_TIMESTAMP)').bind(o.id, o.customer, o.customer, plan, status, o.current_period_end || null)]);
@@ -239,10 +257,75 @@ app.get('/r/:id', async c => {
   return c.html(tpl.replace('<!--OG-->', og).replace(/<title>[^<]*<\/title>/, `<title>${escH(r.title)} · Lux Prime Kitchen</title>`).replace('data-share-id=""', `data-share-id="${escH(id)}"`));
 });
 
+// ---- Lux Prime Kitchen Magazine ----
+const malcolmFetch = env => { const mBase = String(env.MALCOLM_AI_URL || '').replace(/\/+$/, ''); return (url, opts) => (env.MALCOLM && mBase && String(url).startsWith(mBase)) ? env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts); };
+const magTier = (u, row) => isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : magW.entitled(u, row) ? 'subscriber' : isPremium(u) ? 'member' : 'free';
+async function previewsToday(c, uid) { return ((await db(c).prepare("SELECT COUNT(*) n FROM magazine_issues WHERE user_id=? AND kind='preview' AND created_at>=date('now')").bind(uid).first()) || {}).n || 0; }
+app.get('/api/magazine', async c => {
+  const E = c.env; const u = c.get('user'); const base = { price: '£1.99', available: !!(E.STRIPE_SECRET_KEY && E.STRIPE_PRICE_MAGAZINE), emailReady: magW.emailReady(E), sample: '/mag/sample.pdf', cover: '/mag/sample-cover.jpg' };
+  if (!u) return c.json(base);
+  const row = await magW.magRow(E, u.id); const tier = magTier(u, row); const last = await db(c).prepare("SELECT month,status,token,sent_at FROM magazine_issues WHERE user_id=? AND kind='monthly' AND token IS NOT NULL ORDER BY id DESC LIMIT 1").bind(u.id).first();
+  return c.json({ ...base, entitled: magW.entitled(u, row), free: isAdmin(u) || isTester(u), status: row ? row.status : 'none', optIn: !!(row && row.opt_in), canAdd: !!(u.stripe_subscription_id && ['active', 'trialing'].includes(u.sub_status)),
+    previewsLeft: Math.max(0, magW.PREVIEW_CAPS[tier] - await previewsToday(c, u.id)), latest: last ? { month: last.month, url: `/m/issue/${last.token}` } : null });
+});
+app.post('/api/magazine/optin', needAuth, async c => {
+  const u = c.get('user'); const on = !!(await body(c)).optIn; const row = await magW.magRow(c.env, u.id);
+  if (on && !magW.entitled(u, row)) return c.json({ error: 'Add the magazine first to receive it by email', upgrade: '/pricing.html#magazine' }, 402);
+  await db(c).prepare(`INSERT INTO magazine_subs(user_id,opt_in,${on ? 'opt_in_at' : 'opt_out_at'},unsub_token) VALUES(?,?,CURRENT_TIMESTAMP,?) ON CONFLICT(user_id) DO UPDATE SET opt_in=excluded.opt_in, ${on ? 'opt_in_at' : 'opt_out_at'}=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP`).bind(u.id, on ? 1 : 0, magW.newUnsubToken()).run();
+  return c.json({ ok: true, optIn: on });
+});
+// Personal preview, generated on demand (Malcolm + FLUX + PDF, ~20-60 s). Entitled readers and paying members; per-day caps + IP rate limit.
+app.get('/api/magazine/preview', rl('magpv', 4, 600), needAuth, async c => {
+  const u = c.get('user'); const row = await magW.magRow(c.env, u.id); const tier = magTier(u, row);
+  if (tier === 'free') return c.json({ error: 'Personal previews come with the magazine add-on — see the free sample instead', sample: '/mag/sample.pdf' }, 402);
+  if (await previewsToday(c, u.id) >= magW.PREVIEW_CAPS[tier]) return c.json({ error: 'You’ve reached today’s preview limit — try again tomorrow' }, 429);
+  const ins = await db(c).prepare("INSERT INTO magazine_issues(user_id,month,kind,status,attempts) VALUES(?,?,'preview','working',1)").bind(u.id, new Date().toISOString()).run(); const id = ins.meta.last_row_id;
+  try {
+    const iss = await magW.buildIssue(c.env, u, { fetchImpl: malcolmFetch(c.env), manageUrl: `${appUrl(c)}/account.html#magazine`, issueNo: 'Preview' });
+    await db(c).prepare("UPDATE magazine_issues SET status='done', bytes=?, ms=? WHERE id=?").bind(iss.pdf.length, iss.ms, id).run();
+    return new Response(iss.pdf, { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="Lux-Prime-Kitchen-Magazine-${iss.profile.month}-${iss.profile.year}.pdf"`, 'Cache-Control': 'no-store', 'X-Magazine-Ms': String(iss.ms) } });
+  } catch (e) {
+    console.error('magazine preview', e && e.message);
+    await db(c).prepare("UPDATE magazine_issues SET status='failed', error=? WHERE id=?").bind(String(e && e.message || e).slice(0, 200), id).run();
+    return c.json({ error: e && e.message === 'AI_BUSY' ? 'Malcolm is busy composing — please try again in a minute' : 'We couldn’t compose your magazine just now — please try again shortly' }, 503);
+  }
+});
+app.get('/m/issue/:token', async c => {
+  const t = c.req.param('token'); if (!/^[0-9a-f]{48}$/.test(t)) return c.text('Not found', 404);
+  const pdf = await c.env.IMAGES.get(`mag/${t}.pdf`, 'arrayBuffer'); if (!pdf) return c.text('This issue has expired', 404);
+  return new Response(pdf, { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': 'inline; filename="Lux-Prime-Kitchen-Magazine.pdf"', 'Cache-Control': 'private, max-age=3600', 'X-Robots-Tag': 'noindex' } });
+});
+const unsubPage = (msg, form = '') => `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Magazine emails · Lux Prime Kitchen</title><link rel="stylesheet" href="/css/styles.css"></head><body><main class="wrap" style="max-width:560px;padding:64px 20px"><span class="eyebrow">Lux Prime Kitchen Magazine</span><h1 style="font-family:var(--serif)">Email preferences</h1><p>${msg}</p>${form}<p class="muted" style="font-size:.9rem">To cancel the £1.99 add-on itself, use <a href="/account.html#magazine">your account</a> (Manage billing).</p></main></body></html>`;
+app.get('/m/unsubscribe', async c => {
+  const t = String(c.req.query('t') || ''); if (!/^[0-9a-f]{48}$/.test(t)) return c.html(unsubPage('This link isn’t valid. You can manage emails from your account.'), 400);
+  return c.html(unsubPage('Stop receiving the monthly magazine by email?', `<form method="post" action="/m/unsubscribe?t=${t}"><button class="btn">Unsubscribe</button></form>`));
+});
+app.post('/m/unsubscribe', async c => { // also the RFC 8058 one-click target
+  const t = String(c.req.query('t') || ''); if (!/^[0-9a-f]{48}$/.test(t)) return c.html(unsubPage('This link isn’t valid.'), 400);
+  const r = await db(c).prepare('UPDATE magazine_subs SET opt_in=0, opt_out_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE unsub_token=?').bind(t).run();
+  return c.html(unsubPage(r.meta.changes ? 'Done — you won’t receive magazine emails any more. You can opt back in from your account at any time.' : 'We couldn’t find that subscription.'));
+});
+
 app.post('/api/billing/checkout', needAuth, async c => {
   const E = c.env; if (!E.STRIPE_SECRET_KEY) return c.json({ error: 'Payments are not configured yet' }, 503);
-  const b = await body(c); const plan = plans()[b && b.plan]; if (!plan || !plan.priceId) return c.json({ error: 'Unknown plan' }, 400);
-  const u = c.get('user'); const base = appUrl(c);
+  const b = await body(c); const u = c.get('user'); const base = appUrl(c);
+  if (b && b.plan === 'magazine') {
+    if (!E.STRIPE_PRICE_MAGAZINE) return c.json({ error: 'The magazine add-on is not on sale yet' }, 503);
+    const row = await magW.magRow(c.env, u.id); if (magW.entitled(u, row)) return c.json({ error: 'You already have the magazine' }, 409);
+    // Paying member: add a £1.99 line item to the existing subscription (prorated). Everyone else: standalone checkout.
+    if (b.mode === 'add' && u.stripe_subscription_id && ['active', 'trialing'].includes(u.sub_status)) {
+      const it = await stripeApi(E.STRIPE_SECRET_KEY, 'subscription_items', { subscription: u.stripe_subscription_id, price: E.STRIPE_PRICE_MAGAZINE, quantity: 1, proration_behavior: 'create_prorations', 'metadata[addon]': 'magazine' });
+      await db(c).prepare("INSERT INTO magazine_subs(user_id,status,stripe_subscription_id,stripe_item_id,unsub_token) VALUES(?,'active',?,?,?) ON CONFLICT(user_id) DO UPDATE SET status='active', stripe_subscription_id=excluded.stripe_subscription_id, stripe_item_id=excluded.stripe_item_id, updated_at=CURRENT_TIMESTAMP").bind(u.id, u.stripe_subscription_id, it.id, magW.newUnsubToken()).run();
+      return c.json({ added: true });
+    }
+    const s = await stripeApi(E.STRIPE_SECRET_KEY, 'checkout/sessions', {
+      mode: 'subscription', 'line_items[0][price]': E.STRIPE_PRICE_MAGAZINE, 'line_items[0][quantity]': 1, client_reference_id: String(u.id),
+      ...(u.stripe_customer_id ? { customer: u.stripe_customer_id } : { customer_email: u.email }),
+      'metadata[plan]': 'magazine', 'subscription_data[metadata][plan]': 'magazine', 'subscription_data[metadata][user_id]': String(u.id),
+      allow_promotion_codes: 'true', success_url: `${base}/account.html?checkout=magazine#magazine`, cancel_url: `${base}/pricing.html?checkout=cancelled#magazine` });
+    return c.json({ url: s.url });
+  }
+  const plan = plans()[b && b.plan]; if (!plan || !plan.priceId) return c.json({ error: 'Unknown plan' }, 400);
   const s = await stripeApi(E.STRIPE_SECRET_KEY, 'checkout/sessions', {
     mode: 'subscription', 'line_items[0][price]': plan.priceId, 'line_items[0][quantity]': 1, client_reference_id: String(u.id),
     ...(u.stripe_customer_id ? { customer: u.stripe_customer_id } : { customer_email: u.email }),
@@ -264,5 +347,11 @@ app.all('*', c => c.env.ASSETS.fetch(c.req.raw));
 export default {
   fetch: app.fetch,
   // Daily cleanup of expired sessions and rate-limit rows.
-  async scheduled(_e, env) { await env.DB.batch([env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(Date.now()), env.DB.prepare('DELETE FROM rate_limits WHERE reset_at<?').bind(Math.floor(Date.now() / 1000))]); }
+  async scheduled(e, env) {
+    if (e.cron === '17 3 * * *') { await env.DB.batch([env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(Date.now()), env.DB.prepare('DELETE FROM rate_limits WHERE reset_at<?').bind(Math.floor(Date.now() / 1000))]); return; }
+    // Magazine: every 20 min — enqueue on the 1st from 08:00 UK, then one issue per tick (keeps each run inside Workers/AI limits).
+    globalThis.process = globalThis.process || { env: {} }; process.env = process.env || {}; for (const [k, v] of Object.entries(env)) if (typeof v === 'string') process.env[k] = v;
+    const log = await magW.tick(env, { fetchImpl: malcolmFetch(env), base: (env.APP_URL || 'https://luxprime-ai-chef.oliverluxthorley.workers.dev').replace(/\/$/, ''), batch: +env.MAGAZINE_BATCH || 1 });
+    if (log.enqueued || log.processed.length) console.log('magazine', JSON.stringify(log));
+  }
 };

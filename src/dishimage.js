@@ -44,4 +44,4 @@ function buildPrompt(r) {
 }
 const altText = r => `Photo of ${String(r.title).slice(0, 110)}${keyIngredients(r, 3).length ? ' with ' + keyIngredients(r, 3).join(', ') : ''} (AI-generated illustration)`;
 const DAILY_CAPS = { admin: 300, tester: 60, member: 40, free: 12 };
-module.exports = { imageKey, imageBasis, buildPrompt, altText, keyIngredients, method, garnish, DAILY_CAPS };
+module.exports = { clean, imageKey, imageBasis, buildPrompt, altText, keyIngredients, method, garnish, DAILY_CAPS };
