@@ -1,0 +1,21 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: node scripts/build-static.js
+      - name: Secret scan of repository
+        run: "! git grep -nE 'eyJhb[G]ci|sk_(l[i]ve|t[e]st)_[A-Za-z0-9]{10,}' -- . ':!package-lock.json'"

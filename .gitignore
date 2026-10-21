@@ -1,0 +1,15 @@
+node_modules
+.env
+data/*.db*
+
+.env.*
+!.env.example
+secrets/
+*.db
+*.db-*
+*.sqlite
+node_modules/
+dist/
+data/img-cache/
+*.pem
+*.key

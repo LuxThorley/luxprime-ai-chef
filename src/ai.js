@@ -1,0 +1,114 @@
+'use strict';
+// Provider-agnostic AI chef layer with strict JSON schema validation, retry and offline fallback.
+const { z } = require('zod');
+const { rank, shoppingList } = require('./ranker');
+const { UK14 } = require('./recipes');
+const { isUnsafe, enforceAllergens } = require('./safety');
+
+const Ingredient = z.object({ name: z.string().min(1).max(120), qty: z.number().nonnegative().nullable(), unit: z.enum(['g','ml','tsp','tbsp','x','pinch','']) });
+const Recipe = z.object({
+  title: z.string().min(2).max(120), cuisine: z.string().max(40), difficulty: z.enum(['easy','medium','hard']),
+  totalMinutes: z.number().int().positive().max(600), servings: z.number().int().min(1).max(20),
+  matchScore: z.number().min(0).max(100), whyItFits: z.string().max(400),
+  ingredients: z.array(Ingredient).min(2).max(30),
+  steps: z.array(z.object({ text: z.string().min(3).max(500), timerMinutes: z.number().int().positive().max(600).nullable() })).min(2).max(25),
+  allergens: z.array(z.enum(UK14)),
+  nutritionPerServing: z.object({ kcal: z.number(), proteinG: z.number(), carbsG: z.number(), fatG: z.number() }),
+  substitutions: z.array(z.object({ ingredient: z.string(), swap: z.string() })).max(15),
+  tips: z.array(z.string().max(300)).max(10).optional()
+});
+const ResponseSchema = z.object({ recipes: z.array(Recipe).min(1).max(5) });
+
+function config() {
+  const p = (process.env.AI_PROVIDER || 'none').toLowerCase();
+  if (p === 'malcolm') return {
+    provider: 'malcolm', url: process.env.MALCOLM_AI_URL, key: process.env.MALCOLM_AI_KEY,
+    model: process.env.MALCOLM_AI_MODEL || 'malcolm-chef', mode: process.env.MALCOLM_AI_MODE || 'openai'
+  };
+  if (p === 'openai') return {
+    provider: 'openai', url: (process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '') + '/chat/completions',
+    key: process.env.AI_API_KEY, model: process.env.AI_MODEL || 'gpt-4o-mini', mode: 'openai'
+  };
+  return { provider: 'none' };
+}
+function aiEnabled() { const c = config(); return c.provider !== 'none' && !!c.url; }
+
+const SYSTEM = `You are the Lux Prime Kitchen AI Chef (powered by Malcolm AI). Return ONLY JSON matching:
+{"recipes":[{"title","cuisine","difficulty":"easy|medium|hard","totalMinutes":int,"servings":int,"matchScore":0-100,"whyItFits",
+"ingredients":[{"name","qty":number|null,"unit":"g|ml|tsp|tbsp|x|pinch|"}],"steps":[{"text","timerMinutes":int|null}],
+"allergens":[UK 14 allergen names: ${UK14.join(', ')}],"nutritionPerServing":{"kcal","proteinG","carbsG","fatG"},
+"substitutions":[{"ingredient","swap"}],"tips":[string]}]}
+Rules: 3-5 real, tested-style recipes ranked best first; UK metric quantities scaled to the requested servings; British English;
+respect ALL dietary filters and exclusions strictly; never exceed the time budget by more than 10%; include safe cooking temperatures
+for meat/fish/eggs; never suggest unsafe practices (raw flour, pink poultry, honey for babies, wild foraging, washing raw chicken);
+nutrition is an estimate. If kids mode, keep steps simple and mark adult-only steps with "(grown-up job)".`;
+
+function buildUserPrompt(q) {
+  return JSON.stringify({
+    include: q.include, exclude: q.exclude, dish: q.dish || null, maxMinutes: q.maxMinutes, difficulty: q.difficulty || 'any',
+    servings: q.servings, diets: q.diets, cuisine: q.cuisine || 'any', kidsMode: !!q.kidsMode, count: q.limit || 4
+  });
+}
+function extractJson(text) {
+  if (typeof text !== 'string') return text;
+  const m = text.match(/```(?:json)?\s*([\s\S]*?)```/); const s = m ? m[1] : text;
+  const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  return JSON.parse(s.slice(a, b + 1));
+}
+async function callProvider(c, messages, fetchImpl = fetch) {
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), +process.env.AI_TIMEOUT_MS || 30000);
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (c.key) headers.Authorization = `Bearer ${c.key}`;
+    if (c.mode === 'lattice') {
+      // Malcolm Omni-Lattice (Cloudflare Worker): POST {base}/omni/command {command}. It currently returns a status
+      // envelope {status,mode,result}; we accept recipes from result/recipes if present, else validation fails -> library.
+      const base = String(c.url).replace(/\/+$/, '').replace(/\/omni\/command$/, '');
+      const command = `${messages[0].content}\n\nREQUEST: ${messages.slice(1).map(m => m.content).join('\n')}`;
+      const res = await fetchImpl(base + '/omni/command', { method: 'POST', headers, body: JSON.stringify({ command }), signal: ctrl.signal });
+      if (!res.ok) throw new Error(`AI HTTP ${res.status}`);
+      const data = await res.json();
+      if (data && Array.isArray(data.recipes)) return data;
+      return data && (data.result && typeof data.result === 'object' ? data.result : data.result || data.output || data.text || '');
+    }
+    const body = c.mode === 'native'
+      ? { task: 'recipes', model: c.model, system: messages[0].content, query: JSON.parse(messages[1].content), history: messages.slice(2) }
+      : { model: c.model, messages, temperature: 0.4, response_format: { type: 'json_object' } };
+    const res = await fetchImpl(c.url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+    if (!res.ok) throw new Error(`AI HTTP ${res.status}`);
+    const data = await res.json();
+    if (c.mode === 'native') return data; // expects {recipes:[...]}
+    return data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+  } finally { clearTimeout(t); }
+}
+
+async function generate(q, { fetchImpl, retries = 2 } = {}) {
+  const c = config();
+  if (!aiEnabled()) return { source: 'offline', recipes: rank(q, { limit: q.limit || 4 }) };
+  const messages = [{ role: 'system', content: SYSTEM }, { role: 'user', content: buildUserPrompt(q) }];
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const raw = await callProvider(c, messages, fetchImpl);
+      const parsed = ResponseSchema.parse(extractJson(raw));
+      const recipes = parsed.recipes.filter(r => !isUnsafe(r)).map((r, i) => {
+        enforceAllergens(r);
+        const ingredients = r.ingredients.map(x => ({ ...x, display: x.qty == null ? x.name : (x.unit === 'x' ? `${x.qty} ${x.name}` : `${x.qty} ${x.unit} ${x.name}`) }));
+        return {
+          ...r, id: `ai-${Date.now()}-${i}`, ingredients, baseServings: r.servings,
+          steps: r.steps.map((s, n) => ({ n: n + 1, ...s })),
+          nutritionPerServing: { ...r.nutritionPerServing, isEstimate: true },
+          diet: Object.fromEntries((q.diets || []).map(d => [d, true])),
+          shoppingList: shoppingList({ ingredients }, q.include || []), source: c.provider === 'malcolm' ? 'Malcolm AI' : 'AI chef'
+        };
+      });
+      if (!recipes.length) throw new Error('All AI recipes failed safety checks');
+      return { source: c.provider, recipes };
+    } catch (e) {
+      lastErr = e;
+      messages.push({ role: 'user', content: `Your previous reply was invalid (${String(e.message).slice(0, 300)}). Reply again with ONLY valid JSON matching the schema.` });
+    }
+  }
+  return { source: 'offline', fallbackReason: String(lastErr && lastErr.message), recipes: rank(q, { limit: q.limit || 4 }) };
+}
+module.exports = { generate, aiEnabled, config, ResponseSchema, extractJson };

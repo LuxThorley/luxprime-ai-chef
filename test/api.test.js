@@ -1,0 +1,66 @@
+'use strict';
+const test = require('node:test'); const assert = require('node:assert');
+process.env.AI_PROVIDER = 'none'; process.env.JWT_SECRET = 'test-secret'; process.env.IMAGE_PROVIDER = 'none';
+const request = require('supertest'); const { createApp } = require('../src/server'); const { open } = require('../src/db');
+const ai = require('../src/ai');
+
+function agent() { const db = open(':memory:'); const app = createApp({ db, stripe: null }); return { db, ag: request.agent(app) }; }
+async function csrf(ag) { const r = await ag.get('/api/csrf'); return r.body.csrfToken; }
+async function signup(ag, email = 'cook@example.com') { const t = await csrf(ag); const r = await ag.post('/api/auth/register').set('x-csrf-token', t).send({ email, password: 'supersecret1' }); assert.equal(r.status, 201); return t; }
+
+test('health + plans + security headers', async () => {
+  const { ag } = agent(); const h = await ag.get('/api/health'); assert.equal(h.body.ai, 'none'); assert.ok(h.headers['content-security-policy']); assert.ok(!h.headers['x-powered-by']);
+  const p = await ag.get('/api/plans'); assert.deepStrictEqual(p.body.plans.map(x => x.id), ['free', 'monthly', 'family']);
+});
+test('CSRF required on mutating requests', async () => { const { ag } = agent(); await ag.get('/api/csrf'); const r = await ag.post('/api/auth/register').send({ email: 'a@b.co', password: 'supersecret1' }); assert.equal(r.status, 403); });
+test('auth: register, duplicate, login, wrong password', async () => {
+  const { ag } = agent(); const t = await signup(ag);
+  assert.equal((await ag.post('/api/auth/register').set('x-csrf-token', t).send({ email: 'cook@example.com', password: 'supersecret1' })).status, 409);
+  assert.equal((await ag.post('/api/auth/login').set('x-csrf-token', t).send({ email: 'cook@example.com', password: 'wrongpass1' })).status, 401);
+  assert.equal((await ag.post('/api/auth/login').set('x-csrf-token', t).send({ email: 'cook@example.com', password: 'supersecret1' })).status, 200);
+});
+test('search requires login and validates input', async () => {
+  const { ag } = agent(); const t = await csrf(ag);
+  assert.equal((await ag.post('/api/search').set('x-csrf-token', t).send({ include: ['egg'] })).status, 401);
+  await signup(ag); assert.equal((await ag.post('/api/search').set('x-csrf-token', t).send({})).status, 400);
+  assert.equal((await ag.post('/api/search').set('x-csrf-token', t).send({ include: ['<script>'] })).status, 400);
+});
+test('offline search returns complete recipes; free trial gated after 3', async () => {
+  const { ag } = agent(); const t = await signup(ag);
+  const r = await ag.post('/api/search').set('x-csrf-token', t).send({ include: ['chicken', 'rice'], maxMinutes: 40, servings: 4, diets: ['dairy-free'], kidsMode: true });
+  assert.equal(r.status, 200); assert.equal(r.body.source, 'offline'); assert.ok(r.body.recipes.length >= 1 && r.body.recipes.length <= 3);
+  const x = r.body.recipes[0]; for (const k of ['title', 'matchScore', 'whyItFits', 'ingredients', 'steps', 'allergens', 'nutritionPerServing', 'substitutions', 'shoppingList', 'safetyNotes', 'image']) assert.ok(k in x, k);
+  assert.ok(x.nutritionPerServing.isEstimate); assert.ok(x.safetyNotes.some(n => /75°C/.test(n)));
+  await ag.post('/api/search').set('x-csrf-token', t).send({ dish: 'soup' }); await ag.post('/api/search').set('x-csrf-token', t).send({ dish: 'pasta' });
+  const g = await ag.post('/api/search').set('x-csrf-token', t).send({ dish: 'curry' }); assert.equal(g.status, 402);
+});
+test('premium gating for favourites; premium user gets 5 results + favourites', async () => {
+  const { ag, db } = agent(); const t = await signup(ag);
+  assert.equal((await ag.get('/api/favourites')).status, 402);
+  db.prepare("UPDATE users SET plan='monthly', sub_status='active'").run();
+  const r = await ag.post('/api/search').set('x-csrf-token', t).send({ include: ['onion'] }); assert.equal(r.body.recipes.length, 5);
+  assert.equal((await ag.post('/api/favourites').set('x-csrf-token', t).send({ recipe: r.body.recipes[0] })).status, 201);
+  assert.equal((await ag.get('/api/favourites')).body.favourites.length, 1); assert.equal((await ag.get('/api/history')).body.history.length, 1);
+});
+test('share creates public page with Open Graph meta', async () => {
+  const { ag } = agent(); const t = await signup(ag);
+  const r = await ag.post('/api/search').set('x-csrf-token', t).send({ dish: 'bolognese' });
+  const s = await ag.post('/api/share').set('x-csrf-token', t).send({ recipe: r.body.recipes[0] }); assert.equal(s.status, 201);
+  const page = await request(ag.app).get('/r/' + s.body.id); assert.equal(page.status, 200);
+  assert.match(page.text, /og:title" content="[^"]*Bolognese/); assert.match(page.text, /twitter:card/); assert.match(page.text, /og:image" content="[^"]+\/img\/pasta\.jpg/);
+});
+test('billing endpoints report not configured without Stripe keys; webhook rejects', async () => {
+  const { ag } = agent(); const t = await signup(ag);
+  assert.equal((await ag.post('/api/billing/checkout').set('x-csrf-token', t).send({ plan: 'monthly' })).status, 503);
+  assert.equal((await request(ag.app).post('/api/billing/webhook').set('content-type', 'application/json').send('{}')).status, 503);
+});
+test('AI layer: validates JSON, retries on bad output, enforces allergens', async () => {
+  process.env.AI_PROVIDER = 'openai'; process.env.AI_BASE_URL = 'http://fake.local/v1';
+  const good = { recipes: [{ title: 'Prawn Rice Bowl', cuisine: 'Asian', difficulty: 'easy', totalMinutes: 20, servings: 2, matchScore: 90, whyItFits: 'uses prawns', ingredients: [{ name: 'king prawns', qty: 200, unit: 'g' }, { name: 'rice', qty: 150, unit: 'g' }], steps: [{ text: 'Cook rice', timerMinutes: 12 }, { text: 'Fry prawns until pink', timerMinutes: 3 }], allergens: [], nutritionPerServing: { kcal: 400, proteinG: 25, carbsG: 50, fatG: 8 }, substitutions: [] }] };
+  let calls = 0; const fetchImpl = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: calls++ === 0 ? 'not json at all' : JSON.stringify(good) } }] }) });
+  const out = await ai.generate({ include: ['prawns'], servings: 2 }, { fetchImpl });
+  assert.equal(calls, 2); assert.equal(out.source, 'openai'); assert.deepStrictEqual(out.recipes[0].allergens, ['crustaceans']);
+  const bad = await ai.generate({ include: ['egg'] }, { fetchImpl: async () => ({ ok: false, status: 500 }) });
+  assert.equal(bad.source, 'offline'); assert.ok(bad.fallbackReason);
+  process.env.AI_PROVIDER = 'none';
+});
