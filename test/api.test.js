@@ -105,3 +105,21 @@ test('change password: needs current password, enforces length, then new passwor
   const anon = agent(); const t2 = await csrf(anon.ag); assert.equal((await anon.ag.post('/api/auth/password').set('x-csrf-token', t2).send({ currentPassword: 'x', newPassword: 'yyyyyyyy' })).status, 401);
 });
 test('options: "any" cuisine is first so searches default to any cuisine', async () => { const { ag } = agent(); const o = await ag.get('/api/options'); assert.equal(o.body.cuisines[0], 'any'); });
+test('AI busy: library fallback flagged for everyone; reason only for admin', async () => {
+  const keep = { ...process.env }; Object.assign(process.env, { AI_PROVIDER: 'malcolm', MALCOLM_AI_URL: 'http://127.0.0.1:9/', MALCOLM_AI_MODE: 'lattice', AI_TIMEOUT_MS: '3000', ADMIN_EMAILS: 'boss@example.com' });
+  try {
+    const { ag } = agent(); const t = await signup(ag, 'cook2@example.com');
+    const r = await ag.post('/api/search').set('x-csrf-token', t).send({ include: ['chicken'] }); assert.equal(r.status, 200); assert.equal(r.body.source, 'offline'); assert.equal(r.body.aiBusy, true); assert.ok(!('fallbackReason' in r.body));
+    const a = agent(); const t2 = await signup(a.ag, 'boss@example.com');
+    const r2 = await a.ag.post('/api/search').set('x-csrf-token', t2).send({ include: ['chicken'] }); assert.equal(r2.body.aiBusy, true); assert.ok(r2.body.fallbackReason);
+  } finally { for (const k of ['AI_PROVIDER', 'MALCOLM_AI_URL', 'MALCOLM_AI_MODE', 'AI_TIMEOUT_MS', 'ADMIN_EMAILS']) { if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k]; } }
+});
+test('malcolm: 502 detail and timeouts become a readable fallback reason', async () => {
+  Object.assign(process.env, { AI_PROVIDER: 'malcolm', MALCOLM_AI_URL: 'https://example.invalid/', MALCOLM_AI_MODE: 'lattice' });
+  delete require.cache[require.resolve('../src/ai')]; const ai = require('../src/ai');
+  const out = await ai.generate({ include: ['chicken'], maxMinutes: 40, servings: 2, diets: [] }, { retries: 0, fetchImpl: async () => ({ ok: false, status: 502, json: async () => ({ detail: 'all providers failed: gemini: timeout' }) }) });
+  assert.equal(out.source, 'offline'); assert.match(out.fallbackReason, /502: all providers failed: gemini: timeout/);
+  const to = await ai.generate({ include: ['chicken'], maxMinutes: 40, servings: 2, diets: [] }, { retries: 0, fetchImpl: async () => { const e = new Error('aborted'); e.name = 'AbortError'; throw e; } });
+  assert.match(to.fallbackReason, /AI timeout/);
+  for (const k of ['AI_PROVIDER', 'MALCOLM_AI_URL', 'MALCOLM_AI_MODE']) delete process.env[k];
+});

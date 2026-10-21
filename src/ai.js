@@ -69,7 +69,7 @@ async function callProvider(c, messages, fetchImpl = fetch) {
       const base = String(c.url).replace(/\/+$/, '').replace(/\/(omni\/command|v1\/recipes)$/, '');
       const query = JSON.parse(messages[1].content);
       const res = await fetchImpl(base + '/v1/recipes', { method: 'POST', headers, body: JSON.stringify(query), signal: ctrl.signal });
-      if (!res.ok) throw new Error(`AI HTTP ${res.status}`);
+      if (!res.ok) { let d = ''; try { const j = await res.json(); d = (j && (j.detail || j.error)) || ''; } catch {} throw new Error(`AI HTTP ${res.status}${d ? ': ' + String(d).slice(0, 240) : ''}`); }
       return res.json();
     }
     const body = c.mode === 'native'
@@ -107,7 +107,7 @@ async function generate(q, { fetchImpl, retries = 2, references = [] } = {}) {
       if (!recipes.length) throw new Error('All AI recipes failed safety checks');
       return { source: c.provider, recipes, blessing: parsed.blessing || null, closing: parsed.closing || null, meta: { provider: parsed.provider || null, model: parsed.model || null, failovers: (parsed.failovers || []).length } };
     } catch (e) {
-      lastErr = e;
+      lastErr = e && e.name === 'AbortError' ? new Error(`AI timeout after ${+process.env.AI_TIMEOUT_MS || 60000} ms`) : e;
       messages.push({ role: 'user', content: `Your previous reply was invalid (${String(e.message).slice(0, 300)}). Reply again with ONLY valid JSON matching the schema.` });
     }
   }
