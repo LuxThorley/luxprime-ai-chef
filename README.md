@@ -57,22 +57,12 @@ D1:Edit, Account Settings:Read) and `CLOUDFLARE_ACCOUNT_ID` exist; otherwise it 
 4. Stripe: create the two monthly prices, set `STRIPE_SECRET_KEY`, `STRIPE_PRICE_MONTHLY`, `STRIPE_PRICE_FAMILY`, and a webhook to
    `{APP_URL}/api/billing/webhook` → `STRIPE_WEBHOOK_SECRET`. Test mode first.
 
-### Malcolm AI endpoint status (probed 2026-10-21)
-The worker exposes `GET /healthz`, `GET /modes/status`, `POST /omni/command {command}`, `POST /optimize`, `GET /auth/inspect`
-(see `/openapi.json`). There is no OpenAI-style `/v1/chat/completions`. `/omni/command` currently replies with a status envelope
-(`{"status":"executed","result":"Command executed through the Omni-Lattice."}`) rather than recipe JSON, so the `lattice` mode in
-`src/ai.js` sends the request there and, until the worker returns `{recipes:[...]}` matching `ResponseSchema`, users automatically
-get curated-library results. Once the worker returns recipe JSON (in `recipes` or `result`), no app change is needed.
-
-
-Subscription web app: users enter ingredients (include/exclude) **or** a dish description, plus time, difficulty,
-servings, dietary filters, cuisine and kids mode. The AI chef returns 3–5 ranked, complete recipes: match score and
-"why it fits", UK metric quantities scaled to servings, step-by-step method with timers, UK-14 allergen tags,
-nutrition **estimate**, substitutions, food-safety notes and a shopping list. Favourites, history, print view,
-PDF export, image card, share links (X, Facebook, WhatsApp, Pinterest, LinkedIn, email, Web Share API, copy link)
-and public recipe pages with Open Graph / Twitter cards.
-
-**Works with no API keys**: a curated library of 60 real recipes plus a deterministic ranking engine.
+### Malcolm AI endpoint (updated 2026-10-21)
+The Malcolm worker now exposes **`POST /v1/recipes`** (same Bearer auth as `/omni/command`). It takes the AI Chef query
+(`include, exclude, dish, maxMinutes, difficulty, servings, diets, cuisine, kidsMode, count`), generates recipes with
+Cloudflare Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`, JSON-schema mode, one retry) and returns `{recipes:[...]}`
+matching `ResponseSchema`. Typical latency is 25–40 s, so `AI_TIMEOUT_MS` is 60–75 s. Existing endpoints
+(`/healthz`, `/modes/status`, `/omni/command`, `/optimize`, `/auth/inspect`) are unchanged. On any error users get curated-library picks.
 
 ## Quick start
 ```bash
@@ -117,7 +107,7 @@ Never commit `.env`. Only `.env.example` (no real values) ships in this package.
 Set `AI_PROVIDER=malcolm` and `MALCOLM_AI_URL` to your endpoint.
 * `MALCOLM_AI_MODE=openai` (default): the endpoint must accept an OpenAI-style chat completion
   `POST {model, messages, response_format:{type:"json_object"}}` and return `{choices:[{message:{content:"<json>"}}]}`.
-* `MALCOLM_AI_MODE=lattice`: POST `{command}` to `{MALCOLM_AI_URL}/omni/command` (the live Omni-Lattice worker).
+* `MALCOLM_AI_MODE=lattice` (alias `recipes`): POST the structured query to `{MALCOLM_AI_URL}/v1/recipes` (the live Malcolm worker).
 * `MALCOLM_AI_MODE=native`: we POST `{task:"recipes", model, system, query:{include,exclude,dish,maxMinutes,difficulty,servings,diets,cuisine,kidsMode,count}}`
   and expect `{recipes:[...]}` directly.
 

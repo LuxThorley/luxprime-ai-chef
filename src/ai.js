@@ -56,20 +56,17 @@ function extractJson(text) {
   return JSON.parse(s.slice(a, b + 1));
 }
 async function callProvider(c, messages, fetchImpl = fetch) {
-  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), +process.env.AI_TIMEOUT_MS || 30000);
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), +process.env.AI_TIMEOUT_MS || 60000);
   try {
     const headers = { 'Content-Type': 'application/json' };
     if (c.key) headers.Authorization = `Bearer ${c.key}`;
-    if (c.mode === 'lattice') {
-      // Malcolm Omni-Lattice (Cloudflare Worker): POST {base}/omni/command {command}. It currently returns a status
-      // envelope {status,mode,result}; we accept recipes from result/recipes if present, else validation fails -> library.
-      const base = String(c.url).replace(/\/+$/, '').replace(/\/omni\/command$/, '');
-      const command = `${messages[0].content}\n\nREQUEST: ${messages.slice(1).map(m => m.content).join('\n')}`;
-      const res = await fetchImpl(base + '/omni/command', { method: 'POST', headers, body: JSON.stringify({ command }), signal: ctrl.signal });
+    if (c.mode === 'lattice' || c.mode === 'recipes') {
+      // Malcolm AI worker: POST {base}/v1/recipes with the structured query; returns {recipes:[...]} (Workers AI).
+      const base = String(c.url).replace(/\/+$/, '').replace(/\/(omni\/command|v1\/recipes)$/, '');
+      const query = JSON.parse(messages[1].content);
+      const res = await fetchImpl(base + '/v1/recipes', { method: 'POST', headers, body: JSON.stringify(query), signal: ctrl.signal });
       if (!res.ok) throw new Error(`AI HTTP ${res.status}`);
-      const data = await res.json();
-      if (data && Array.isArray(data.recipes)) return data;
-      return data && (data.result && typeof data.result === 'object' ? data.result : data.result || data.output || data.text || '');
+      return res.json();
     }
     const body = c.mode === 'native'
       ? { task: 'recipes', model: c.model, system: messages[0].content, query: JSON.parse(messages[1].content), history: messages.slice(2) }

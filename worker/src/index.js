@@ -130,7 +130,10 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   const u = c.get('user'), prem = isPremium(u), pl = plans();
   if (!prem && u.searches_used >= pl.free.searches) return c.json({ error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' }, 402);
   const q = { ...p.data, difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
-  const out = await ai.generate(q, { retries: +(c.env.AI_RETRIES ?? 1) });
+  // Same-account workers.dev subrequests are blocked, so reach the Malcolm worker through its service binding.
+  const mBase = String(c.env.MALCOLM_AI_URL || '').replace(/\/+$/, '');
+  const fetchImpl = (url, opts) => (c.env.MALCOLM && mBase && String(url).startsWith(mBase)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
+  const out = await ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1) });
   const recipes = out.recipes.map(r => ({ ...r, image: imagesMod.curatedImage(r), safetyNotes: safetyNotes(r, q) }));
   await db(c).batch([
     db(c).prepare('UPDATE users SET searches_used = searches_used + 1 WHERE id=?').bind(u.id),
