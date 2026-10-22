@@ -32,3 +32,12 @@ test('PDF writer: WinAnsi encoding and a valid 7-page magazine', () => {
   try { const info = execFileSync('pdfinfo', [f]).toString(); assert.match(info, /Pages:\s+7/); const txt = execFileSync('pdftotext', [f, '-']).toString(); assert.match(txt, /Prepared for Oliver/); assert.match(txt, /Your shopping list/); assert.match(txt, /Wines & accompaniments/); }
   catch (e) { if (e.code !== 'ENOENT') throw e; assert.equal(String.fromCharCode(...pdf.slice(0, 8)), '%PDF-1.7'); }
 });
+test('tiers: Gastronomique £16.99 with 5 household seats; legacy Family maps to Gastronomique; magazine included for Head Chef/Gastronomique', () => {
+  const P = require('../src/plans'); const g = P.plans().gastronomique; assert.equal(g.price, '£16.99'); assert.equal(g.seats, 5);
+  process.env.STRIPE_PRICE_FAMILY = 'price_fam'; process.env.STRIPE_PRICE_HEAD_CHEF = 'price_head';
+  assert.equal(P.planFromPrice('price_fam'), 'gastronomique'); assert.equal(P.planFromPrice('price_head'), 'head'); assert.equal(P.plans().gastronomique.priceId, 'price_fam');
+  const act = plan => ({ email: 'a@b.c', plan, sub_status: 'active' });
+  assert.ok(P.magazineIncluded(act('family')) && P.magazineIncluded(act('head')) && P.magazineIncluded(act('gastronomique')) && !P.magazineIncluded(act('monthly')));
+  assert.ok(P.canOwnSeats(act('gastronomique')) && !P.canOwnSeats(act('head')) && !P.canOwnSeats({ ...act('gastronomique'), _associateOf: 1 }));
+  assert.equal(P.planName(act('family')), 'Gastronomique'); delete process.env.STRIPE_PRICE_FAMILY; delete process.env.STRIPE_PRICE_HEAD_CHEF;
+});

@@ -10,7 +10,7 @@ async function signup(ag, email = 'cook@example.com') { const t = await csrf(ag)
 
 test('health + plans + security headers', async () => {
   const { ag } = agent(); const h = await ag.get('/api/health'); assert.equal(h.body.ai, 'none'); assert.ok(h.headers['content-security-policy']); assert.ok(!h.headers['x-powered-by']);
-  const p = await ag.get('/api/plans'); assert.deepStrictEqual(p.body.plans.map(x => x.id), ['free', 'monthly', 'head']);
+  const p = await ag.get('/api/plans'); assert.deepStrictEqual(p.body.plans.map(x => x.id), ['free', 'monthly', 'head', 'gastronomique']);
 });
 test('CSRF required on mutating requests', async () => { const { ag } = agent(); await ag.get('/api/csrf'); const r = await ag.post('/api/auth/register').send({ email: 'a@b.co', password: 'supersecret1' }); assert.equal(r.status, 403); });
 test('auth: register, duplicate, login, wrong password', async () => {

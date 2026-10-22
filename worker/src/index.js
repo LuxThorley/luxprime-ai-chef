@@ -12,6 +12,7 @@ import dishimage from '../../src/dishimage.js';
 import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSafeEqualStr } from './crypto.js';
 import { stripeApi } from './stripe.js';
 import * as magW from './magazine.js';
+import * as members from './members.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
@@ -31,7 +32,7 @@ const SESSION_DAYS = 30;
 const app = new Hono();
 const appUrl = c => (c.env.APP_URL || new URL(c.req.url).origin).replace(/\/$/, '');
 const db = c => c.env.DB;
-const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), household: u._associateOf ? { role: 'member', owner: u._ownerName } : plansMod.canOwnSeats(u) ? { role: 'owner', seats: plansMod.seatCap() } : null, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
 const bad = (c, e) => c.json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' }, 400);
 
 // Expose string bindings to the shared Node modules (ai.js / plans.js read process.env).
@@ -112,7 +113,7 @@ app.use('/api/*', async (c, next) => {
   const sid = getCookie(c, 'lp_session');
   if (sid) {
     const u = await db(c).prepare('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?').bind(sid, Date.now()).first();
-    if (u) c.set('user', u);
+    if (u) c.set('user', await members.effectiveUser(db(c), u));
   }
   await next();
 });
@@ -180,7 +181,7 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   await db(c).batch([
     db(c).prepare('UPDATE users SET searches_used = searches_used + 1 WHERE id=?').bind(u.id),
     db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify(p.data), recipes.map(r => r.title).join(' · '))]);
-  const fresh = await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first();
+  const fresh = await members.effectiveUser(db(c), await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first());
   return c.json({ source: out.source, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
 });
 
@@ -257,6 +258,27 @@ app.get('/r/:id', async c => {
   return c.html(tpl.replace('<!--OG-->', og).replace(/<title>[^<]*<\/title>/, `<title>${escH(r.title)} · Lux Prime Kitchen</title>`).replace('data-share-id=""', `data-share-id="${escH(id)}"`));
 });
 
+// ---- Gastronomique household seats ----
+const EmailOnly = z.object({ email: z.string().trim().toLowerCase().email().max(200) });
+app.get('/api/members', needAuth, async c => { const u = c.get('user'); if (!plansMod.canOwnSeats(u)) return c.json({ owner: false, seats: plansMod.seatCap() }); return c.json({ owner: true, ...(await members.listMembers(db(c), u)) }); });
+app.post('/api/members/invite', rl('invite', 20, 3600), needAuth, async c => {
+  const p = EmailOnly.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user');
+  const r = await members.invite(db(c), u, p.data.email); if (r.error) return c.json({ error: r.error }, r.status);
+  const link = `${appUrl(c)}/account.html?invite=${r.token}`; let emailed = false;
+  if (magW.emailReady(c.env)) { try {
+    const who = u.name || u.email; const res = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${c.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: c.env.MAGAZINE_FROM, to: [p.data.email], subject: `${who} invited you to their Lux Prime Kitchen Gastronomique plan`,
+      text: `${who} has invited you to join their Lux Prime Kitchen Gastronomique household: unlimited AI chef recipes and your own personalised monthly magazine.\n\nAccept (sign in or create a free account with this email address): ${link}\n\nIf you weren't expecting this, just ignore this email.` }) }); emailed = res.ok; } catch (e) { console.error('invite email', e && e.message); } }
+  return c.json({ ok: true, emailed, link });
+});
+app.delete('/api/members/me', needAuth, async c => { await members.leave(db(c), c.get('user')); return c.json({ ok: true }); });
+app.delete('/api/members/:id', needAuth, async c => { const r = await members.remove(db(c), c.get('user'), +c.req.param('id') || 0); return c.json({ ok: !!r.meta.changes }); });
+app.post('/api/members/accept', rl('accept', 20, 3600), needAuth, async c => {
+  const t = String((await body(c)).token || ''); if (!/^[0-9a-f]{48}$/.test(t)) return c.json({ error: 'Invalid invite link' }, 400);
+  const raw = await db(c).prepare('SELECT * FROM users WHERE id=?').bind(c.get('user').id).first();
+  const r = await members.accept(db(c), raw, t); if (r.error) return c.json({ error: r.error }, r.status);
+  return c.json({ ok: true, user: publicUser(await members.effectiveUser(db(c), raw)) });
+});
+
 // ---- Lux Prime Kitchen Magazine ----
 const malcolmFetch = env => { const mBase = String(env.MALCOLM_AI_URL || '').replace(/\/+$/, ''); return (url, opts) => (env.MALCOLM && mBase && String(url).startsWith(mBase)) ? env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts); };
 const magTier = (u, row) => isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : magW.entitled(u, row) ? 'subscriber' : isPremium(u) ? 'member' : 'free';
@@ -265,7 +287,7 @@ app.get('/api/magazine', async c => {
   const E = c.env; const u = c.get('user'); const base = { price: plansMod.magazinePrice(), included: 'head', headChefPrice: plans().head.price, available: !!(E.STRIPE_SECRET_KEY && E.STRIPE_PRICE_MAGAZINE), emailReady: magW.emailReady(E), sample: '/mag/sample.pdf', cover: '/mag/sample-cover.jpg' };
   if (!u) return c.json(base);
   const row = await magW.magRow(E, u.id); const tier = magTier(u, row); const last = await db(c).prepare("SELECT month,status,token,sent_at FROM magazine_issues WHERE user_id=? AND kind='monthly' AND token IS NOT NULL ORDER BY id DESC LIMIT 1").bind(u.id).first();
-  return c.json({ ...base, entitled: magW.entitled(u, row), free: isAdmin(u) || isTester(u), viaPlan: !isAdmin(u) && !isTester(u) && plansMod.magazineIncluded(u), status: row ? row.status : 'none', optIn: !!(row && row.opt_in), canAdd: !!(u.stripe_subscription_id && ['active', 'trialing'].includes(u.sub_status)),
+  return c.json({ ...base, entitled: magW.entitled(u, row), free: isAdmin(u) || isTester(u), viaPlan: !isAdmin(u) && !isTester(u) && plansMod.magazineIncluded(u), planName: plansMod.planName(u), household: !!u._associateOf, status: row ? row.status : 'none', optIn: !!(row && row.opt_in), canAdd: !!(u.stripe_subscription_id && ['active', 'trialing'].includes(u.sub_status)),
     previewsLeft: Math.max(0, magW.PREVIEW_CAPS[tier] - await previewsToday(c, u.id)), latest: last ? { month: last.month, url: `/m/issue/${last.token}` } : null });
 });
 app.post('/api/magazine/optin', needAuth, async c => {

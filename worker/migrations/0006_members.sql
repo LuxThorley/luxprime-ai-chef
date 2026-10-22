@@ -1,0 +1,3 @@
+-- Gastronomique household seats: owner invites associates by email; associates inherit the owner's Gastronomique entitlements.
+CREATE TABLE IF NOT EXISTS plan_members (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, email TEXT NOT NULL, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, token TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'invited', created_at TEXT DEFAULT CURRENT_TIMESTAMP, joined_at TEXT, UNIQUE(owner_id, email));
+CREATE UNIQUE INDEX IF NOT EXISTS plan_members_user ON plan_members(user_id) WHERE user_id IS NOT NULL;
