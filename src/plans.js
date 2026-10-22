@@ -7,7 +7,7 @@ function plans() {
   return {
     free: { id: 'free', name: 'Commis Chef', price: '£0', searches: +(E.FREE_SEARCHES || 3), results: 3, features: ['3 recipe searches', 'Up to 3 recipes per search', 'Print & share', 'Magazine available as a £3.99 add-on'] },
     monthly: { id: 'monthly', name: 'Chef de Partie', price: E.PRICE_CHEF_DE_PARTIE_LABEL || '£6.99', priceId: E.STRIPE_PRICE_CHEF_DE_PARTIE || E.STRIPE_PRICE_MONTHLY, searches: Infinity, results: 5, features: ['Unlimited AI chef searches', 'Up to 5 ranked recipes', 'Favourites & history', 'Shopping lists', 'Kids mode', 'Magazine available as a £3.99 add-on'] },
-    head: { id: 'head', name: 'Head Chef', price: E.PRICE_HEAD_CHEF_LABEL || '£9.99', priceId: E.STRIPE_PRICE_HEAD_CHEF || E.STRIPE_PRICE_FAMILY, searches: Infinity, results: 5, features: ['Everything in Chef de Partie', 'Lux Prime Kitchen Magazine included', 'Priority Malcolm AI', 'Unlimited AI dish photos'] }
+    head: { id: 'head', name: 'Head Chef', price: E.PRICE_HEAD_CHEF_LABEL || '£9.99', priceId: E.STRIPE_PRICE_HEAD_CHEF || E.STRIPE_PRICE_FAMILY, searches: Infinity, results: 5, features: ['Everything in Chef de Partie', 'Lux Prime Kitchen Magazine included', 'Priority Malcolm AI', 'Monthly issue emailed to you (opt-in)'] }
   };
 }
 const magazinePrice = () => process.env.PRICE_MAGAZINE_LABEL || '£3.99';
