@@ -32,7 +32,7 @@ const SESSION_DAYS = 30;
 const app = new Hono();
 const appUrl = c => (c.env.APP_URL || new URL(c.req.url).origin).replace(/\/$/, '');
 const db = c => c.env.DB;
-const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), household: u._associateOf ? { role: 'member', owner: u._ownerName } : plansMod.canOwnSeats(u) ? { role: 'owner', seats: plansMod.seatCap() } : null, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), trial: u._trial ? { endsAt: new Date(+u.trial_ends_at).toISOString(), daysLeft: Math.max(1, Math.ceil((+u.trial_ends_at - Date.now()) / 864e5)) } : null, household: u._associateOf ? { role: 'member', owner: u._ownerName } : plansMod.canOwnSeats(u) ? { role: 'owner', seats: plansMod.seatCap() } : null, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
 const bad = (c, e) => c.json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' }, 400);
 
 // Expose string bindings to the shared Node modules (ai.js / plans.js read process.env).
@@ -67,7 +67,7 @@ app.post('/api/billing/webhook', async c => {
   await db(c).prepare('INSERT INTO stripe_events(id) VALUES(?)').bind(event.id).run();
   const o = event.data.object; const E = c.env;
   const priceToPlan = plansMod.planFromPrice;
-  const isMag = pid => !!E.STRIPE_PRICE_MAGAZINE && pid === E.STRIPE_PRICE_MAGAZINE;
+  const isMag = plansMod.isMagazinePrice;
   const magUpsert = (uidSql, uidVal, status, subId, itemId) => db(c).prepare(`INSERT INTO magazine_subs(user_id,status,stripe_subscription_id,stripe_item_id,unsub_token,updated_at) SELECT u.id,?,?,?,?,CURRENT_TIMESTAMP FROM users u WHERE u.id=(${uidSql}) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status, stripe_subscription_id=excluded.stripe_subscription_id, stripe_item_id=COALESCE(excluded.stripe_item_id, stripe_item_id), updated_at=CURRENT_TIMESTAMP`).bind(status, subId, itemId || null, magW.newUnsubToken(), uidVal);
   // Magazine add-on: standalone subscription (any tier, incl. free) or an extra line item on a membership subscription.
   if (event.type === 'checkout.session.completed' && o.mode === 'subscription' && o.metadata && o.metadata.plan === 'magazine') {
@@ -130,8 +130,8 @@ app.post('/api/auth/register', rl('auth', 20, 900), async c => {
   const p = AuthSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
   if (await db(c).prepare('SELECT 1 FROM users WHERE email=?').bind(p.data.email).first()) return c.json({ error: 'An account with that email already exists' }, 409);
   const hash = await hashPassword(p.data.password);
-  const u = await db(c).prepare('INSERT INTO users(email,password_hash,name) VALUES(?,?,?) RETURNING *').bind(p.data.email, hash, p.data.name || null).first();
-  await startSession(c, u); return c.json({ user: publicUser(u) }, 201);
+  const u = await db(c).prepare('INSERT INTO users(email,password_hash,name,trial_ends_at) VALUES(?,?,?,?) RETURNING *').bind(p.data.email, hash, p.data.name || null, Date.now() + plansMod.TRIAL_DAYS * 864e5).first();
+  await startSession(c, u); return c.json({ user: publicUser(await members.effectiveUser(db(c), u)) }, 201);
 });
 app.post('/api/auth/login', rl('auth', 20, 900), async c => {
   const p = AuthSchema.safeParse(await body(c)); if (!p.success) return c.json({ error: 'Incorrect email or password' }, 401);
@@ -154,7 +154,7 @@ app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
 });
 app.delete('/api/me', needAuth, async c => { if (isTester(c.get('user'))) return c.json({ error: 'The shared test account can’t be deleted from the site' }, 403); await db(c).prepare('DELETE FROM users WHERE id=?').bind(c.get('user').id).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/health', c => c.json({ ok: true, runtime: 'cloudflare-workers', ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!c.env.STRIPE_SECRET_KEY }));
-app.get('/api/plans', c => { const s = !!c.env.STRIPE_SECRET_KEY; return c.json({ plans: Object.values(plans()).map(({ priceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(s && priceId) })) }); });
+app.get('/api/plans', c => { const s = !!c.env.STRIPE_SECRET_KEY; const m = plansMod.magazine(); return c.json({ plans: Object.values(plans()).map(({ priceId, annualPriceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(s && priceId), availableAnnual: p.id === 'free' || !!(s && annualPriceId) })), magazine: { price: m.price, annualPrice: m.annualPrice, savePct: m.savePct } }); });
 app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set(RECIPES.map(r => r.cuisine))].sort()] }));
 
 app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
@@ -179,7 +179,7 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
     } catch (e) { console.error('dish-image prep', e && e.message); }
   }
   await db(c).batch([
-    db(c).prepare('UPDATE users SET searches_used = searches_used + 1 WHERE id=?').bind(u.id),
+    db(c).prepare('UPDATE users SET searches_used = searches_used + ? WHERE id=?').bind(prem ? 0 : 1, u.id), // Commis Chef allowance only counts non-paid, non-trial searches
     db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify(p.data), recipes.map(r => r.title).join(' · '))]);
   const fresh = await members.effectiveUser(db(c), await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first());
   return c.json({ source: out.source, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
@@ -281,10 +281,10 @@ app.post('/api/members/accept', rl('accept', 20, 3600), needAuth, async c => {
 
 // ---- Lux Prime Kitchen Magazine ----
 const malcolmFetch = env => { const mBase = String(env.MALCOLM_AI_URL || '').replace(/\/+$/, ''); return (url, opts) => (env.MALCOLM && mBase && String(url).startsWith(mBase)) ? env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts); };
-const magTier = (u, row) => isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : magW.entitled(u, row) ? 'subscriber' : isPremium(u) ? 'member' : 'free';
+const magTier = (u, row) => isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u._trial ? 'trial' : magW.entitled(u, row) ? 'subscriber' : isPremium(u) ? 'member' : 'free';
 async function previewsToday(c, uid) { return ((await db(c).prepare("SELECT COUNT(*) n FROM magazine_issues WHERE user_id=? AND kind='preview' AND created_at>=date('now')").bind(uid).first()) || {}).n || 0; }
 app.get('/api/magazine', async c => {
-  const E = c.env; const u = c.get('user'); const base = { price: plansMod.magazinePrice(), included: 'head', headChefPrice: plans().head.price, available: !!(E.STRIPE_SECRET_KEY && E.STRIPE_PRICE_MAGAZINE), emailReady: magW.emailReady(E), sample: '/mag/sample.pdf', cover: '/mag/sample-cover.jpg' };
+  const E = c.env; const u = c.get('user'); const mg = plansMod.magazine(); const base = { price: mg.price, annualPrice: mg.annualPrice, savePct: mg.savePct, included: 'head', headChefPrice: plans().head.price, available: !!(E.STRIPE_SECRET_KEY && E.STRIPE_PRICE_MAGAZINE), availableAnnual: !!(E.STRIPE_SECRET_KEY && E.STRIPE_PRICE_MAGAZINE_ANNUAL), emailReady: magW.emailReady(E), sample: '/mag/sample.pdf', cover: '/mag/sample-cover.jpg' };
   if (!u) return c.json(base);
   const row = await magW.magRow(E, u.id); const tier = magTier(u, row); const last = await db(c).prepare("SELECT month,status,token,sent_at FROM magazine_issues WHERE user_id=? AND kind='monthly' AND token IS NOT NULL ORDER BY id DESC LIMIT 1").bind(u.id).first();
   return c.json({ ...base, entitled: magW.entitled(u, row), free: isAdmin(u) || isTester(u), viaPlan: !isAdmin(u) && !isTester(u) && plansMod.magazineIncluded(u), planName: plansMod.planName(u), household: !!u._associateOf, status: row ? row.status : 'none', optIn: !!(row && row.opt_in), canAdd: !!(u.stripe_subscription_id && ['active', 'trialing'].includes(u.sub_status)),
@@ -330,26 +330,27 @@ app.post('/m/unsubscribe', async c => { // also the RFC 8058 one-click target
 
 app.post('/api/billing/checkout', needAuth, async c => {
   const E = c.env; if (!E.STRIPE_SECRET_KEY) return c.json({ error: 'Payments are not configured yet' }, 503);
-  const b = await body(c); const u = c.get('user'); const base = appUrl(c);
+  const b = await body(c); const u = c.get('user'); const base = appUrl(c); const annual = b && b.interval === 'year';
   if (b && b.plan === 'magazine') {
-    if (!E.STRIPE_PRICE_MAGAZINE) return c.json({ error: 'The magazine add-on is not on sale yet' }, 503);
+    const magPrice = annual ? E.STRIPE_PRICE_MAGAZINE_ANNUAL : E.STRIPE_PRICE_MAGAZINE;
+    if (!magPrice) return c.json({ error: `The ${annual ? 'annual ' : ''}magazine add-on is not on sale yet` }, 503);
     const row = await magW.magRow(c.env, u.id); if (magW.entitled(u, row)) return c.json({ error: 'You already have the magazine' }, 409);
-    // Paying member: add a £3.50 line item to the existing subscription (prorated). Everyone else: standalone checkout.
+    // Paying member: add a £3.49 line item to the existing subscription (prorated). Everyone else: standalone checkout.
     if (b.mode === 'add' && u.stripe_subscription_id && ['active', 'trialing'].includes(u.sub_status)) {
-      const it = await stripeApi(E.STRIPE_SECRET_KEY, 'subscription_items', { subscription: u.stripe_subscription_id, price: E.STRIPE_PRICE_MAGAZINE, quantity: 1, proration_behavior: 'create_prorations', 'metadata[addon]': 'magazine' });
+      const it = await stripeApi(E.STRIPE_SECRET_KEY, 'subscription_items', { subscription: u.stripe_subscription_id, price: magPrice, quantity: 1, proration_behavior: 'create_prorations', 'metadata[addon]': 'magazine' });
       await db(c).prepare("INSERT INTO magazine_subs(user_id,status,stripe_subscription_id,stripe_item_id,unsub_token) VALUES(?,'active',?,?,?) ON CONFLICT(user_id) DO UPDATE SET status='active', stripe_subscription_id=excluded.stripe_subscription_id, stripe_item_id=excluded.stripe_item_id, updated_at=CURRENT_TIMESTAMP").bind(u.id, u.stripe_subscription_id, it.id, magW.newUnsubToken()).run();
       return c.json({ added: true });
     }
     const s = await stripeApi(E.STRIPE_SECRET_KEY, 'checkout/sessions', {
-      mode: 'subscription', 'line_items[0][price]': E.STRIPE_PRICE_MAGAZINE, 'line_items[0][quantity]': 1, client_reference_id: String(u.id),
+      mode: 'subscription', 'line_items[0][price]': magPrice, 'line_items[0][quantity]': 1, client_reference_id: String(u.id),
       ...(u.stripe_customer_id ? { customer: u.stripe_customer_id } : { customer_email: u.email }),
       'metadata[plan]': 'magazine', 'subscription_data[metadata][plan]': 'magazine', 'subscription_data[metadata][user_id]': String(u.id),
       allow_promotion_codes: 'true', success_url: `${base}/account.html?checkout=magazine#magazine`, cancel_url: `${base}/pricing.html?checkout=cancelled#magazine` });
     return c.json({ url: s.url });
   }
-  const plan = plans()[b && b.plan]; if (!plan || !plan.priceId) return c.json({ error: 'Unknown plan' }, 400);
+  const plan = plans()[b && b.plan]; const priceId = plan && (annual ? plan.annualPriceId : plan.priceId); if (!plan || !priceId) return c.json({ error: plan ? `${annual ? 'Annual' : 'Monthly'} billing for ${plan.name} is not on sale yet` : 'Unknown plan' }, plan ? 503 : 400);
   const s = await stripeApi(E.STRIPE_SECRET_KEY, 'checkout/sessions', {
-    mode: 'subscription', 'line_items[0][price]': plan.priceId, 'line_items[0][quantity]': 1, client_reference_id: String(u.id),
+    mode: 'subscription', 'line_items[0][price]': priceId, 'line_items[0][quantity]': 1, client_reference_id: String(u.id),
     ...(u.stripe_customer_id ? { customer: u.stripe_customer_id } : { customer_email: u.email }),
     'metadata[plan]': plan.id, 'subscription_data[metadata][plan]': plan.id, 'subscription_data[metadata][user_id]': String(u.id),
     allow_promotion_codes: 'true', success_url: `${base}/account.html?checkout=success`, cancel_url: `${base}/pricing.html?checkout=cancelled` });

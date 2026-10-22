@@ -34,7 +34,7 @@ rewriting paths for the `/luxprime-ai-chef/` base and replacing server calls wit
 * Shared logic (`src/ai.js`, `ranker.js`, `recipes.js`, `safety.js`, `plans.js`) is bundled from the same source as the Node server
 
 Worker secrets: `MALCOLM_AI_KEY`, `JWT_SECRET` (set). To switch on payments add `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
-`STRIPE_PRICE_CHEF_DE_PARTIE`, `STRIPE_PRICE_HEAD_CHEF`, `STRIPE_PRICE_GASTRONOMIQUE`, `STRIPE_PRICE_MAGAZINE` (Stripe webhook → `https://luxprime-ai-chef.oliverluxthorley.workers.dev/api/billing/webhook`,
+`STRIPE_PRICE_CHEF_DE_PARTIE`, `STRIPE_PRICE_HEAD_CHEF`, `STRIPE_PRICE_GASTRONOMIQUE`, `STRIPE_PRICE_MAGAZINE` + the `…_ANNUAL` versions (Stripe webhook → `https://luxprime-ai-chef.oliverluxthorley.workers.dev/api/billing/webhook`,
 events `checkout.session.completed`, `customer.subscription.*`). Optional `APP_URL` for a custom domain.
 
 ```bash
@@ -54,7 +54,7 @@ D1:Edit, Account Settings:Read) and `CLOUDFLARE_ACCOUNT_ID` exist; otherwise it 
    `MALCOLM_AI_KEY` (paste the Malcolm token into Render's secret field — never into the repo), plus the Stripe keys when ready.
 3. The token is also stored as the GitHub Actions secret `MALCOLM_AI_KEY` (and `MALCOLM_AI_URL` as a repo variable) so a
    future deploy workflow can push it to the host via `${{ secrets.MALCOLM_AI_KEY }}`. GitHub never shows secret values back.
-4. Stripe: create the four monthly prices (£5.00 / £8.00 / £12.00 / magazine £3.50), set `STRIPE_SECRET_KEY`, `STRIPE_PRICE_CHEF_DE_PARTIE`, `STRIPE_PRICE_HEAD_CHEF`, `STRIPE_PRICE_GASTRONOMIQUE`, `STRIPE_PRICE_MAGAZINE`, and a webhook to
+4. Stripe: create the eight prices (monthly £4.99 / £7.99 / £11.99 / magazine £3.49; annual £49 / £79 / £119 / magazine £34.90), set `STRIPE_SECRET_KEY`, `STRIPE_PRICE_CHEF_DE_PARTIE`, `STRIPE_PRICE_HEAD_CHEF`, `STRIPE_PRICE_GASTRONOMIQUE`, `STRIPE_PRICE_MAGAZINE` (+ `_ANNUAL` versions), and a webhook to
    `{APP_URL}/api/billing/webhook` → `STRIPE_WEBHOOK_SECRET`. Test mode first.
 
 ### Malcolm AI endpoint (updated 2026-10-21)
@@ -81,7 +81,7 @@ src/ranker.js     Offline deterministic ranking (ingredient overlap, dish text, 
 src/recipes.js    Expands dataset, derives UK-14 allergens + diet flags, scales quantities
 src/safety.js     Food-safety guardrails: core temperatures, banned unsafe advice, allergen re-derivation
 src/images.js     Curated category photos + optional AI dish-image generation with disk cache
-src/plans.js      Tiers: Commis Chef (free, 3 searches), Chef de Partie £5.00/mo, Head Chef £8.00/mo (magazine included), Gastronomique £12.00/mo (5 household seats, magazine for each member); Magazine add-on £3.50/mo; entitlements
+src/plans.js      Tiers: Commis Chef (free, 3 searches; new sign-ups get a 7-day Head Chef trial), Chef de Partie £4.99/mo or £49/yr, Head Chef £7.99/mo or £79/yr (magazine included), Gastronomique £11.99/mo or £119/yr (5 household seats, magazine for each member); Magazine add-on £3.49/mo or £34.90/yr; entitlements
 src/db.js         SQLite schema (better-sqlite3)
 data/recipes.js   60 curated recipes
 public/           Landing, pricing, app (3-step wizard), account, share, terms, privacy; css/js/img/vendor(jsPDF)
@@ -98,7 +98,7 @@ test/             ranking.test.js, api.test.js
 | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` | OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, Together, Ollama, vLLM…) |
 | `MALCOLM_AI_URL`, `MALCOLM_AI_KEY`, `MALCOLM_AI_MODEL`, `MALCOLM_AI_MODE` | Malcolm AI / Omni-Lattice endpoint |
 | `IMAGE_PROVIDER`, `IMAGE_BASE_URL`, `IMAGE_API_KEY`, `IMAGE_MODEL`, `IMAGE_SIZE`, `IMAGE_CACHE_DIR` | Optional dish images for AI recipes |
-| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_CHEF_DE_PARTIE`, `STRIPE_PRICE_HEAD_CHEF`, `STRIPE_PRICE_GASTRONOMIQUE`, `STRIPE_PRICE_MAGAZINE` | Stripe billing (£5.00 / £8.00 / £12.00 / £3.50 monthly) |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_CHEF_DE_PARTIE`, `STRIPE_PRICE_HEAD_CHEF`, `STRIPE_PRICE_GASTRONOMIQUE`, `STRIPE_PRICE_MAGAZINE` + `…_ANNUAL` | Stripe billing (monthly £4.99 / £7.99 / £11.99 / £3.49; annual £49 / £79 / £119 / £34.90) |
 | `FREE_SEARCHES`, `PRICE_MONTHLY_LABEL`, `PRICE_FAMILY_LABEL` | Plan display placeholders |
 
 Never commit `.env`. Only `.env.example` (no real values) ships in this package.
@@ -122,9 +122,10 @@ For AI recipes, set `IMAGE_PROVIDER=openai` and an OpenAI-compatible `/images/ge
 generated on demand via `/api/dish-image?title=…`, cached in `IMAGE_CACHE_DIR`, and fall back to the closest curated photo.
 
 ## Stripe setup (use TEST mode first)
-1. Create four Products in Stripe with recurring monthly GBP Prices: Chef de Partie £5.00, Head Chef £8.00,
-   Gastronomique £12.00 and Lux Prime Kitchen Magazine add-on £3.50. Copy the `price_…` IDs into
-   `STRIPE_PRICE_CHEF_DE_PARTIE`, `STRIPE_PRICE_HEAD_CHEF`, `STRIPE_PRICE_GASTRONOMIQUE`, `STRIPE_PRICE_MAGAZINE`;
+1. Create four Products in Stripe, each with two recurring GBP Prices (monthly / annual): Chef de Partie £4.99 / £49,
+   Head Chef £7.99 / £79, Gastronomique £11.99 / £119, Lux Prime Kitchen Magazine add-on £3.49 / £34.90. Copy the `price_…` IDs into
+   `STRIPE_PRICE_CHEF_DE_PARTIE`, `STRIPE_PRICE_HEAD_CHEF`, `STRIPE_PRICE_GASTRONOMIQUE`, `STRIPE_PRICE_MAGAZINE` and the
+   matching `…_ANNUAL` variables (`STRIPE_PRICE_CHEF_DE_PARTIE_ANNUAL`, `STRIPE_PRICE_HEAD_CHEF_ANNUAL`, `STRIPE_PRICE_GASTRONOMIQUE_ANNUAL`, `STRIPE_PRICE_MAGAZINE_ANNUAL`);
    put your `sk_test_…` key in `STRIPE_SECRET_KEY`. (Legacy `STRIPE_PRICE_MONTHLY`/`STRIPE_PRICE_FAMILY` still work as fallbacks.)
 2. Enable the **Customer Portal** (Settings → Billing → Customer portal) so users can cancel/update cards.
 3. Add a webhook endpoint `https://YOUR_DOMAIN/api/billing/webhook` with events `checkout.session.completed`,

@@ -103,3 +103,4 @@ body{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/20
 
 .hh-list{list-style:none;padding:0}.hh-list li{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
 #plans{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.bill-toggle{display:inline-flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:99px;margin:6px 0 22px}.bill-toggle button{border:0;background:none;color:var(--mute);font:600 .95rem var(--font);padding:9px 18px;border-radius:99px;cursor:pointer}.bill-toggle button[aria-checked=true]{background:var(--gold);color:#1b1406}.save{background:color-mix(in srgb,var(--ok) 20%,transparent);color:var(--ok);font-size:.75rem;font-weight:700;padding:2px 8px;border-radius:99px}.bill-toggle button[aria-checked=true] .save{background:#1b140620;color:#1b1406}.plan-sub{margin:-6px 0 8px;font-size:.88rem}

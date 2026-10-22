@@ -10,7 +10,7 @@ import { effectiveUser } from './members.js';
 
 const { isAdmin, isTester } = plansMod;
 export const IMG_MODEL = '@cf/black-forest-labs/flux-1-schnell';
-export const PREVIEW_CAPS = { admin: 20, tester: 6, subscriber: 3, member: 2, free: 1 };
+export const PREVIEW_CAPS = { trial: 1, admin: 20, tester: 6, subscriber: 3, member: 2, free: 1 };
 const FONT_KEYS = ['serif', 'serifI', 'serifB', 'sans', 'sansB'];
 const b64ToBytes = b64 => typeof Uint8Array.fromBase64 === 'function' ? Uint8Array.fromBase64(b64) : Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
 const sha = async s => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
@@ -88,7 +88,7 @@ export async function tick(env, { fetchImpl, base, batch = 1 }) {
   const now = new Date(); const lp = londonParts(now); const month = issueMonth(now); const log = { month, enqueued: 0, processed: [] };
   if (+lp.day === 1 && +lp.hour >= 8) {
     const { results } = await env.DB.prepare("SELECT u.* FROM users u JOIN magazine_subs m ON m.user_id=u.id WHERE m.opt_in=1").all();
-    for (const u0 of results) { const u = await effectiveUser(env.DB, u0); const row = await magRow(env, u.id); if (!entitled(u, row)) continue;
+    for (const u0 of results) { const u = await effectiveUser(env.DB, u0); const row = await magRow(env, u.id); if (u._trial || !entitled(u, row)) continue;
       const r = await env.DB.prepare("INSERT OR IGNORE INTO magazine_issues(user_id,month,kind,status) VALUES(?,?,'monthly','pending')").bind(u.id, month).run(); log.enqueued += r.meta.changes || 0; }
   }
   await env.DB.prepare("UPDATE magazine_issues SET status='retry' WHERE status='working' AND kind IN ('monthly','sample') AND started_at < datetime('now','-30 minutes')").run();
@@ -99,7 +99,7 @@ export async function tick(env, { fetchImpl, base, batch = 1 }) {
       let u = await effectiveUser(env.DB, await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(it.user_id).first()); const row = await magRow(env, it.user_id); const sample = it.kind === 'sample';
       // 'sample' rows are created by an operator in D1 only: build + store, never email. The shared tester appears as "Alex".
       if (sample && u && isTester(u)) u = { ...u, name: 'Alex' };
-      if (!u || (!sample && (!row || !row.opt_in || !entitled(u, row)))) { await env.DB.prepare("UPDATE magazine_issues SET status='skipped' WHERE id=?").bind(it.id).run(); continue; }
+      if (!u || (!sample && (!row || !row.opt_in || u._trial || !entitled(u, row)))) { /* trial = on-demand preview only, no emailed issues */ await env.DB.prepare("UPDATE magazine_issues SET status='skipped' WHERE id=?").bind(it.id).run(); continue; }
       const n = ((await env.DB.prepare("SELECT COUNT(*) n FROM magazine_issues WHERE user_id=? AND kind='monthly' AND status='sent'").bind(u.id).first()) || {}).n || 0;
       const manageUrl = `${base}/account.html#magazine`;
       const iss = await buildIssue(env, u, { fetchImpl, issueNo: n + 1, manageUrl, allowLibrary: it.attempts >= 2 });

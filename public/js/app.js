@@ -5,7 +5,7 @@
   try{[me,opts]=await Promise.all([api('/api/me').then(d=>d.user),api('/api/options')])}catch{}
   $('#cuisine').innerHTML=opts.cuisines.map(c=>`<option value="${esc(c)}">${c==='any'?'Any':esc(c)}</option>`).join('');
   $('#diets').innerHTML=opts.diets.map(d=>`<label><input type="checkbox" value="${esc(d)}"><span>${esc(d)}</span></label>`).join('');
-  const quota=()=>{$('#quota').textContent=!me?'Sign in for 3 free searches':me.admin?'Admin · Unlimited':me.tester?'Tester · Full access':me.premium?`${me.planName||'Chef de Partie'} · unlimited searches`:`Commis Chef · ${me.searchesLeft} search${me.searchesLeft===1?'':'es'} left`};quota();
+  const quota=()=>{$('#quota').textContent=!me?'Sign up for a free 7-day Head Chef trial':me.admin?'Admin · Unlimited':me.tester?'Tester · Full access':me.trial?`Head Chef trial · ${me.trial.daysLeft} day${me.trial.daysLeft===1?'':'s'} left · unlimited`:me.premium?`${me.planName||'Chef de Partie'} · unlimited searches`:`Commis Chef · ${me.searchesLeft} search${me.searchesLeft===1?'':'es'} left`};quota();
   // tag inputs
   const tags={inc:[],exc:[]};
   function tagBox(id){const box=$('#'+id),inp=box.querySelector('input');

@@ -4,11 +4,11 @@ import { randomId } from './crypto.js';
 const { canOwnSeats, isPremium, seatCap } = plansMod;
 
 // Returns the user with an in-memory Gastronomique plan if they are an active associate of an entitled owner (never written to D1).
-export async function effectiveUser(DB, u) {
-  if (!u) return u;
+export async function effectiveUser(DB, u0) {
+  if (!u0) return u0; const u = plansMod.withTrial(u0);
   const m = await DB.prepare("SELECT o.* , m.id AS member_id FROM plan_members m JOIN users o ON o.id=m.owner_id WHERE m.user_id=? AND m.status='active'").bind(u.id).first();
   if (!m || !canOwnSeats(m)) return u;
-  const own = isPremium(u) && ['gastronomique', 'family', 'head'].includes(u.plan);
+  const own = isPremium(u) && !u._trial && ['gastronomique', 'family', 'head'].includes(u.plan);
   return own ? { ...u, _associateOf: m.id, _ownerName: m.name || m.email } : { ...u, plan: 'gastronomique', sub_status: 'active', _associateOf: m.id, _ownerName: m.name || m.email, _ownPlan: u.plan };
 }
 export async function listMembers(DB, owner) {
