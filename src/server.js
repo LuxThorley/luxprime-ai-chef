@@ -44,7 +44,7 @@ function createApp({ db = open(), stripe } = {}) {
     if (db.prepare('SELECT 1 FROM stripe_events WHERE id=?').get(event.id)) return res.json({ received: true, duplicate: true });
     db.prepare('INSERT INTO stripe_events(id) VALUES(?)').run(event.id);
     const o = event.data.object;
-    const priceToPlan = pid => pid === process.env.STRIPE_PRICE_FAMILY ? 'family' : pid === process.env.STRIPE_PRICE_MONTHLY ? 'monthly' : null;
+    const priceToPlan = require('./plans').planFromPrice;
     if (event.type === 'checkout.session.completed' && o.mode === 'subscription') {
       db.prepare('UPDATE users SET stripe_customer_id=?, stripe_subscription_id=?, plan=?, sub_status=? WHERE id=?')
         .run(o.customer, o.subscription, (o.metadata && o.metadata.plan) || 'monthly', 'active', +o.client_reference_id);

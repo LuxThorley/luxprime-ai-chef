@@ -31,7 +31,7 @@ const SESSION_DAYS = 30;
 const app = new Hono();
 const appUrl = c => (c.env.APP_URL || new URL(c.req.url).origin).replace(/\/$/, '');
 const db = c => c.env.DB;
-const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
 const bad = (c, e) => c.json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' }, 400);
 
 // Expose string bindings to the shared Node modules (ai.js / plans.js read process.env).
@@ -65,7 +65,7 @@ app.post('/api/billing/webhook', async c => {
   if (await db(c).prepare('SELECT 1 FROM stripe_events WHERE id=?').bind(event.id).first()) return c.json({ received: true, duplicate: true });
   await db(c).prepare('INSERT INTO stripe_events(id) VALUES(?)').bind(event.id).run();
   const o = event.data.object; const E = c.env;
-  const priceToPlan = pid => pid === E.STRIPE_PRICE_FAMILY ? 'family' : pid === E.STRIPE_PRICE_MONTHLY ? 'monthly' : null;
+  const priceToPlan = plansMod.planFromPrice;
   const isMag = pid => !!E.STRIPE_PRICE_MAGAZINE && pid === E.STRIPE_PRICE_MAGAZINE;
   const magUpsert = (uidSql, uidVal, status, subId, itemId) => db(c).prepare(`INSERT INTO magazine_subs(user_id,status,stripe_subscription_id,stripe_item_id,unsub_token,updated_at) SELECT u.id,?,?,?,?,CURRENT_TIMESTAMP FROM users u WHERE u.id=(${uidSql}) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status, stripe_subscription_id=excluded.stripe_subscription_id, stripe_item_id=COALESCE(excluded.stripe_item_id, stripe_item_id), updated_at=CURRENT_TIMESTAMP`).bind(status, subId, itemId || null, magW.newUnsubToken(), uidVal);
   // Magazine add-on: standalone subscription (any tier, incl. free) or an extra line item on a membership subscription.
@@ -262,10 +262,10 @@ const malcolmFetch = env => { const mBase = String(env.MALCOLM_AI_URL || '').rep
 const magTier = (u, row) => isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : magW.entitled(u, row) ? 'subscriber' : isPremium(u) ? 'member' : 'free';
 async function previewsToday(c, uid) { return ((await db(c).prepare("SELECT COUNT(*) n FROM magazine_issues WHERE user_id=? AND kind='preview' AND created_at>=date('now')").bind(uid).first()) || {}).n || 0; }
 app.get('/api/magazine', async c => {
-  const E = c.env; const u = c.get('user'); const base = { price: '£1.99', available: !!(E.STRIPE_SECRET_KEY && E.STRIPE_PRICE_MAGAZINE), emailReady: magW.emailReady(E), sample: '/mag/sample.pdf', cover: '/mag/sample-cover.jpg' };
+  const E = c.env; const u = c.get('user'); const base = { price: plansMod.magazinePrice(), included: 'head', headChefPrice: plans().head.price, available: !!(E.STRIPE_SECRET_KEY && E.STRIPE_PRICE_MAGAZINE), emailReady: magW.emailReady(E), sample: '/mag/sample.pdf', cover: '/mag/sample-cover.jpg' };
   if (!u) return c.json(base);
   const row = await magW.magRow(E, u.id); const tier = magTier(u, row); const last = await db(c).prepare("SELECT month,status,token,sent_at FROM magazine_issues WHERE user_id=? AND kind='monthly' AND token IS NOT NULL ORDER BY id DESC LIMIT 1").bind(u.id).first();
-  return c.json({ ...base, entitled: magW.entitled(u, row), free: isAdmin(u) || isTester(u), status: row ? row.status : 'none', optIn: !!(row && row.opt_in), canAdd: !!(u.stripe_subscription_id && ['active', 'trialing'].includes(u.sub_status)),
+  return c.json({ ...base, entitled: magW.entitled(u, row), free: isAdmin(u) || isTester(u), viaPlan: !isAdmin(u) && !isTester(u) && plansMod.magazineIncluded(u), status: row ? row.status : 'none', optIn: !!(row && row.opt_in), canAdd: !!(u.stripe_subscription_id && ['active', 'trialing'].includes(u.sub_status)),
     previewsLeft: Math.max(0, magW.PREVIEW_CAPS[tier] - await previewsToday(c, u.id)), latest: last ? { month: last.month, url: `/m/issue/${last.token}` } : null });
 });
 app.post('/api/magazine/optin', needAuth, async c => {
@@ -295,7 +295,7 @@ app.get('/m/issue/:token', async c => {
   const pdf = await c.env.IMAGES.get(`mag/${t}.pdf`, 'arrayBuffer'); if (!pdf) return c.text('This issue has expired', 404);
   return new Response(pdf, { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': 'inline; filename="Lux-Prime-Kitchen-Magazine.pdf"', 'Cache-Control': 'private, max-age=3600', 'X-Robots-Tag': 'noindex' } });
 });
-const unsubPage = (msg, form = '') => `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Magazine emails · Lux Prime Kitchen</title><link rel="stylesheet" href="/css/styles.css"></head><body><main class="wrap" style="max-width:560px;padding:64px 20px"><span class="eyebrow">Lux Prime Kitchen Magazine</span><h1 style="font-family:var(--serif)">Email preferences</h1><p>${msg}</p>${form}<p class="muted" style="font-size:.9rem">To cancel the £1.99 add-on itself, use <a href="/account.html#magazine">your account</a> (Manage billing).</p></main></body></html>`;
+const unsubPage = (msg, form = '') => `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Magazine emails · Lux Prime Kitchen</title><link rel="stylesheet" href="/css/styles.css"></head><body><main class="wrap" style="max-width:560px;padding:64px 20px"><span class="eyebrow">Lux Prime Kitchen Magazine</span><h1 style="font-family:var(--serif)">Email preferences</h1><p>${msg}</p>${form}<p class="muted" style="font-size:.9rem">To cancel the magazine add-on itself, use <a href="/account.html#magazine">your account</a> (Manage billing).</p></main></body></html>`;
 app.get('/m/unsubscribe', async c => {
   const t = String(c.req.query('t') || ''); if (!/^[0-9a-f]{48}$/.test(t)) return c.html(unsubPage('This link isn’t valid. You can manage emails from your account.'), 400);
   return c.html(unsubPage('Stop receiving the monthly magazine by email?', `<form method="post" action="/m/unsubscribe?t=${t}"><button class="btn">Unsubscribe</button></form>`));
@@ -312,7 +312,7 @@ app.post('/api/billing/checkout', needAuth, async c => {
   if (b && b.plan === 'magazine') {
     if (!E.STRIPE_PRICE_MAGAZINE) return c.json({ error: 'The magazine add-on is not on sale yet' }, 503);
     const row = await magW.magRow(c.env, u.id); if (magW.entitled(u, row)) return c.json({ error: 'You already have the magazine' }, 409);
-    // Paying member: add a £1.99 line item to the existing subscription (prorated). Everyone else: standalone checkout.
+    // Paying member: add a £3.99 line item to the existing subscription (prorated). Everyone else: standalone checkout.
     if (b.mode === 'add' && u.stripe_subscription_id && ['active', 'trialing'].includes(u.sub_status)) {
       const it = await stripeApi(E.STRIPE_SECRET_KEY, 'subscription_items', { subscription: u.stripe_subscription_id, price: E.STRIPE_PRICE_MAGAZINE, quantity: 1, proration_behavior: 'create_prorations', 'metadata[addon]': 'magazine' });
       await db(c).prepare("INSERT INTO magazine_subs(user_id,status,stripe_subscription_id,stripe_item_id,unsub_token) VALUES(?,'active',?,?,?) ON CONFLICT(user_id) DO UPDATE SET status='active', stripe_subscription_id=excluded.stripe_subscription_id, stripe_item_id=excluded.stripe_item_id, updated_at=CURRENT_TIMESTAMP").bind(u.id, u.stripe_subscription_id, it.id, magW.newUnsubToken()).run();

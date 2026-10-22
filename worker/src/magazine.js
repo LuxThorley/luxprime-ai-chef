@@ -16,7 +16,7 @@ const sha = async s => [...new Uint8Array(await crypto.subtle.digest('SHA-256', 
 
 // Entitlement: free for admin/tester; otherwise an active magazine add-on (any tier, including free accounts).
 export async function magRow(env, uid) { return (await env.DB.prepare('SELECT * FROM magazine_subs WHERE user_id=?').bind(uid).first()) || null; }
-export const entitled = (u, row) => isAdmin(u) || isTester(u) || !!(row && ['active', 'trialing'].includes(row.status));
+export const entitled = (u, row) => plansMod.magazineIncluded(u) || !!(row && ['active', 'trialing'].includes(row.status));
 
 // One image: KV cache hit or FLUX generation (stored under the same key /api/dish-image serves).
 export async function getImage(env, key, prompt, title) {
@@ -68,7 +68,7 @@ export async function sendIssueEmail(env, { to, name, month, year, titles, downl
 <ul style="font-size:17px;line-height:1.6">${titles.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
 <p style="font-size:16px;line-height:1.5">Plus your aisle-by-aisle shopping list, wine pairings and this month’s Escoffier note.</p>
 <p style="margin:26px 0"><a href="${esc(downloadUrl)}" style="background:#c9a35a;color:#16171b;text-decoration:none;padding:13px 22px;font:600 14px Arial,sans-serif;letter-spacing:1px">DOWNLOAD YOUR MAGAZINE (PDF)</a></p>
-<p style="font:12px/1.6 Arial,sans-serif;color:#7a7065">You’re receiving this because you opted in to Lux Prime Kitchen Magazine (£1.99/month). <a href="${esc(unsubUrl)}" style="color:#7a7065">Unsubscribe from these emails</a> · <a href="${esc(manageUrl)}" style="color:#7a7065">Manage or cancel your add-on</a>.</p>
+<p style="font:12px/1.6 Arial,sans-serif;color:#7a7065">You’re receiving this because you opted in to Lux Prime Kitchen Magazine. <a href="${esc(unsubUrl)}" style="color:#7a7065">Unsubscribe from these emails</a> · <a href="${esc(manageUrl)}" style="color:#7a7065">Manage or cancel your add-on</a>.</p>
 </div></div>`;
   const body = { from: env.MAGAZINE_FROM, to: [to], subject: `Your Lux Prime Kitchen Magazine — ${month} ${year}`, html,
     text: `Dear ${name},\n\nYour ${month} issue of Lux Prime Kitchen Magazine is ready: ${titles.join('; ')}.\nDownload: ${downloadUrl}\n\nUnsubscribe: ${unsubUrl}\nManage or cancel: ${manageUrl}\n`,
