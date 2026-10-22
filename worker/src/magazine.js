@@ -30,7 +30,7 @@ export async function getImage(env, key, prompt, title) {
 }
 async function asset(env, path) { const r = await env.ASSETS.fetch(new Request('https://assets.local' + path)); if (!r.ok) throw new Error('asset ' + path + ' ' + r.status); return new Uint8Array(await r.arrayBuffer()); }
 const libraryJpeg = (env, r) => asset(env, imagesMod.curatedImage(r || {}).og);
-const coverPrompt = r => `Editorial food magazine cover photograph of ${r.title}${dishimage.keyIngredients(r).length ? `, with ${dishimage.keyIngredients(r).slice(0, 4).join(', ')}` : ''}. Luxurious, moody fine-dining styling on a dark slate table, warm candlelight and soft window light, overhead three-quarter angle, rich shadows, shallow depth of field, elegant ceramic plate, photorealistic, appetising. No text, no letters, no people, no hands, no clutter.`;
+const coverPrompt = r => `Overhead fine-dining food photograph of ${r.title}${dishimage.keyIngredients(r).length ? `, with ${dishimage.keyIngredients(r).slice(0, 4).join(', ')}` : ''}. Luxurious, moody fine-dining styling on a dark slate table, warm candlelight and soft window light, overhead three-quarter angle, rich shadows, shallow depth of field, elegant ceramic plate, photorealistic, appetising, the plated dish fills the frame. Absolutely no text, no typography, no letters, no logos, no signage, no people, no hands, no clutter.`;
 
 // Build one personalised issue. Throws 'AI_BUSY' if Malcolm fell back to the library (the caller retries later).
 export async function buildIssue(env, user, { fetchImpl, issueNo = 1, manageUrl, now = new Date(), allowLibrary = false } = {}) {
@@ -42,8 +42,10 @@ export async function buildIssue(env, user, { fetchImpl, issueNo = 1, manageUrl,
   if ((out.source === 'offline' || out.fallbackReason) && !allowLibrary) throw new Error('AI_BUSY');
   const recipes = out.recipes.slice(0, 3).map(r => ({ ...r, _pairing: mag.pairing(r) }));
   const tAI = Date.now() - t0;
-  const dishImgs = await Promise.all(recipes.map(async r => { try { return await getImage(env, await dishimage.imageKey(r), dishimage.buildPrompt(r), r.title); } catch (e) { console.error('mag img', e && e.message); return libraryJpeg(env, r); } }));
-  let hero; try { const cp = coverPrompt(recipes[0]); hero = await getImage(env, 'c' + (await sha(cp)).slice(1), cp, recipes[0].title + ' (cover)'); } catch { hero = dishImgs[0]; }
+  // Sequential with one retry: parallel FLUX calls can be rate-limited, and a library photo is a poor substitute for the dish.
+  const tryImg = async (key, prompt, title) => { for (let a = 0; a < 2; a++) { try { return await getImage(env, key, prompt, title); } catch (e) { console.error('mag img', a, e && e.message); } } return null; };
+  const dishImgs = []; for (const r of recipes) dishImgs.push((await tryImg(await dishimage.imageKey(r), dishimage.buildPrompt(r), r.title)) || await libraryJpeg(env, r));
+  const cp = coverPrompt(recipes[0]); const hero = (await tryImg('c' + (await sha(cp)).slice(1), cp, recipes[0].title + ' (cover)')) || dishImgs[0];
   const escNo = (recipes.find(r => r.escoffier) || {}).escoffier; let entry = null; if (escNo) { try { entry = await escoffier.getEntry(all, escNo.no); } catch {} }
   const fontFiles = Object.fromEntries(await Promise.all(FONT_KEYS.map(async k => [k, await asset(env, `/mag/${k}.bin`)])));
   const data = { profile, recipes, shop: mag.shoppingList(recipes, profile), issueNo, manageUrl, blessing: out.blessing, escoffierNote: mag.escoffierNote(recipes, entry ? { ...entry, title: escoffier.titleCase(entry.title) } : null, profile) };
@@ -88,9 +90,10 @@ export async function tick(env, { fetchImpl, base, batch = 1 }) {
     for (const u of results) { const row = await magRow(env, u.id); if (!entitled(u, row)) continue;
       const r = await env.DB.prepare("INSERT OR IGNORE INTO magazine_issues(user_id,month,kind,status) VALUES(?,?,'monthly','pending')").bind(u.id, month).run(); log.enqueued += r.meta.changes || 0; }
   }
+  await env.DB.prepare("UPDATE magazine_issues SET status='retry' WHERE status='working' AND kind IN ('monthly','sample') AND started_at < datetime('now','-30 minutes')").run();
   const { results: due } = await env.DB.prepare("SELECT i.id, i.user_id, i.attempts, i.kind FROM magazine_issues i WHERE i.kind IN ('monthly','sample') AND i.status IN ('pending','retry') AND i.attempts<4 ORDER BY i.id LIMIT ?").bind(batch).all();
   for (const it of due) {
-    await env.DB.prepare("UPDATE magazine_issues SET status='working', attempts=attempts+1 WHERE id=? AND status IN ('pending','retry')").bind(it.id).run();
+    await env.DB.prepare("UPDATE magazine_issues SET status='working', attempts=attempts+1, started_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('pending','retry')").bind(it.id).run();
     try {
       let u = await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(it.user_id).first(); const row = await magRow(env, it.user_id); const sample = it.kind === 'sample';
       // 'sample' rows are created by an operator in D1 only: build + store, never email. The shared tester appears as "Alex".

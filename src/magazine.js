@@ -17,7 +17,7 @@ const AISLES = [
   ['Bakery', /bread|brioche|baguette|sourdough|pastry|tortilla|pitta|naan|croissant|breadcrumb|panko/i],
   ['Wine & drinks', /wine|brandy|cognac|madeira|port\b|sherry|vermouth|beer|cider|calvados|kirsch|rum/i],
   ['Spices & seasonings', /cumin|paprika|cinnamon|nutmeg|clove|cardamom|turmeric|saffron|vanilla|peppercorn|mustard seed|chilli flakes|spice|star anise|allspice|cayenne|garam/i],
-  ['Tins, jars & sauces', /tin|tinned|canned|passata|stock|broth|mustard|vinegar|honey|soy|miso|paste|jam|capers|olive|anchovy|sauce|syrup|tahini|coconut milk/i],
+  ['Tins, jars & sauces', /tin|tinned|canned|passata|stock|broth|mustard|vinegar|honey|soy|miso|paste|jam|capers|olive|anchovy|sauce|syrup|tahini|coconut milk|pesto|harissa|chutney|ketchup|mayonnaise/i],
   ['Pantry & dry goods', /rice|pasta|spaghetti|noodle|flour|sugar|oats|lentil|chickpea|bean|almond|walnut|hazelnut|pistachio|nut|seed|polenta|couscous|quinoa|chocolate|cocoa|gelatin|yeast|baking|dried/i]];
 const aisleOf = n => (AISLES.find(([, re]) => re.test(n)) || ['Other'])[0];
 const cap = s => String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
@@ -171,7 +171,7 @@ function render(data, imgs, fontFiles) {
     pg.line(M, y, PW - M, y, C.rule, 0.6); y += 20;
     const bottomH = 118, colTop = y, colBottom = PH - 52 - bottomH; const IW = 158, SX = M + IW + 24, SW = PW - SX - M;
     const ings = (r.ingredients || []).map(x => x.display || x.name); const steps = (r.steps || []).map(s => s.text || s);
-    let fs = 10.5; const fits = s => { let h = 0; steps.forEach(t => h += wrap(t, 'serif', s, SW - 18).length * s * 1.32 + 5); let h2 = 0; ings.forEach(t => h2 += wrap(t, 'sans', s * 0.82, IW - 10).length * s * 0.82 * 1.38 + 3); return Math.max(h, h2) + 20 <= colBottom - colTop; };
+    let fs = 11.5; const fits = s => { let h = 0; steps.forEach(t => h += wrap(t, 'serif', s, SW - 18).length * s * 1.32 + 5); let h2 = 0; ings.forEach(t => h2 += wrap(t, 'sans', s * 0.82, IW - 10).length * s * 0.82 * 1.38 + 3); return Math.max(h, h2) + 20 <= colBottom - colTop; };
     while (fs > 7.4 && !fits(fs)) fs -= 0.3;
     label(pg, 'Ingredients', M, colTop); label(pg, 'Method', SX, colTop);
     let iy = colTop + 18; for (const t of ings) { if (iy > colBottom) break; pg.rect(M, iy - fs * 0.82 * 0.36, 2.4, 2.4, C.gold); iy = pg.para(t, M + 9, iy, IW - 10, { font: 'sans', size: fs * 0.82, lead: 1.38, color: C.text }) + 3; }
