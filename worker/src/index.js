@@ -334,7 +334,7 @@ app.post('/api/billing/checkout', needAuth, async c => {
   if (b && b.plan === 'magazine') {
     if (!E.STRIPE_PRICE_MAGAZINE) return c.json({ error: 'The magazine add-on is not on sale yet' }, 503);
     const row = await magW.magRow(c.env, u.id); if (magW.entitled(u, row)) return c.json({ error: 'You already have the magazine' }, 409);
-    // Paying member: add a £3.99 line item to the existing subscription (prorated). Everyone else: standalone checkout.
+    // Paying member: add a £3.50 line item to the existing subscription (prorated). Everyone else: standalone checkout.
     if (b.mode === 'add' && u.stripe_subscription_id && ['active', 'trialing'].includes(u.sub_status)) {
       const it = await stripeApi(E.STRIPE_SECRET_KEY, 'subscription_items', { subscription: u.stripe_subscription_id, price: E.STRIPE_PRICE_MAGAZINE, quantity: 1, proration_behavior: 'create_prorations', 'metadata[addon]': 'magazine' });
       await db(c).prepare("INSERT INTO magazine_subs(user_id,status,stripe_subscription_id,stripe_item_id,unsub_token) VALUES(?,'active',?,?,?) ON CONFLICT(user_id) DO UPDATE SET status='active', stripe_subscription_id=excluded.stripe_subscription_id, stripe_item_id=excluded.stripe_item_id, updated_at=CURRENT_TIMESTAMP").bind(u.id, u.stripe_subscription_id, it.id, magW.newUnsubToken()).run();

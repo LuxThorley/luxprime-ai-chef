@@ -1,19 +1,19 @@
 'use strict';
 // Plan placeholders — edit prices in Stripe and labels in .env
-// Tiers (Oct 2026): Commis Chef (free) · Chef de Partie £6.99 · Head Chef £9.99 (magazine included). Magazine add-on £3.99.
-// Internal ids stay 'free' / 'monthly'; legacy 'family' maps to Gastronomique (£16.99, household seats).
+// Tiers (Oct 2026): Commis Chef (free) · Chef de Partie £5.00 · Head Chef £8.00 (magazine included). Magazine add-on £3.50.
+// Internal ids stay 'free' / 'monthly'; legacy 'family' maps to Gastronomique (£12.00, household seats).
 function plans() {
   const E = process.env;
   return {
-    free: { id: 'free', name: 'Commis Chef', price: '£0', searches: +(E.FREE_SEARCHES || 3), results: 3, features: ['3 recipe searches', 'Up to 3 recipes per search', 'Print & share', 'Magazine available as a £3.99 add-on'] },
-    monthly: { id: 'monthly', name: 'Chef de Partie', price: E.PRICE_CHEF_DE_PARTIE_LABEL || '£6.99', priceId: E.STRIPE_PRICE_CHEF_DE_PARTIE || E.STRIPE_PRICE_MONTHLY, searches: Infinity, results: 5, features: ['Unlimited AI chef searches', 'Up to 5 ranked recipes', 'Favourites & history', 'Shopping lists', 'Kids mode', 'Magazine available as a £3.99 add-on'] },
-    head: { id: 'head', name: 'Head Chef', price: E.PRICE_HEAD_CHEF_LABEL || '£9.99', priceId: E.STRIPE_PRICE_HEAD_CHEF, searches: Infinity, results: 5, features: ['Everything in Chef de Partie', 'Lux Prime Kitchen Magazine included', 'Priority Malcolm AI', 'Monthly issue emailed to you (opt-in)'] },
-    gastronomique: { id: 'gastronomique', name: 'Gastronomique', price: E.PRICE_GASTRONOMIQUE_LABEL || '£16.99', priceId: E.STRIPE_PRICE_GASTRONOMIQUE || E.STRIPE_PRICE_FAMILY, searches: Infinity, results: 5, seats: seatCap(), features: ['Everything in Head Chef', `Up to ${seatCap()} members in your household (you + ${seatCap() - 1} invited)`, 'Every member gets their own personalised magazine', 'Kids mode & family-friendly menus', 'Priority Malcolm AI'] }
+    free: { id: 'free', name: 'Commis Chef', price: '£0', searches: +(E.FREE_SEARCHES || 3), results: 3, features: ['3 recipe searches', 'Up to 3 recipes per search', 'Print & share', 'Magazine available as a £3.50 add-on'] },
+    monthly: { id: 'monthly', name: 'Chef de Partie', price: E.PRICE_CHEF_DE_PARTIE_LABEL || '£5.00', priceId: E.STRIPE_PRICE_CHEF_DE_PARTIE || E.STRIPE_PRICE_MONTHLY, searches: Infinity, results: 5, features: ['Unlimited AI chef searches', 'Up to 5 ranked recipes', 'Favourites & history', 'Shopping lists', 'Kids mode', 'Magazine available as a £3.50 add-on'] },
+    head: { id: 'head', name: 'Head Chef', price: E.PRICE_HEAD_CHEF_LABEL || '£8.00', priceId: E.STRIPE_PRICE_HEAD_CHEF, searches: Infinity, results: 5, features: ['Everything in Chef de Partie', 'Lux Prime Kitchen Magazine included', 'Priority Malcolm AI', 'Monthly issue emailed to you (opt-in)'] },
+    gastronomique: { id: 'gastronomique', name: 'Gastronomique', price: E.PRICE_GASTRONOMIQUE_LABEL || '£12.00', priceId: E.STRIPE_PRICE_GASTRONOMIQUE || E.STRIPE_PRICE_FAMILY, searches: Infinity, results: 5, seats: seatCap(), features: ['Everything in Head Chef', `Up to ${seatCap()} members in your household (you + ${seatCap() - 1} invited)`, 'Every member gets their own personalised magazine', 'Kids mode & family-friendly menus', 'Priority Malcolm AI'] }
   };
 }
 // Gastronomique seats: the old Family plan promised “up to 5 family members” (never built) — 5 seats including the owner.
 function seatCap() { return Math.max(2, Math.min(10, +(process.env.GASTRONOMIQUE_SEATS || 5))); }
-const magazinePrice = () => process.env.PRICE_MAGAZINE_LABEL || '£3.99';
+const magazinePrice = () => process.env.PRICE_MAGAZINE_LABEL || '£3.50';
 const planFromPrice = pid => { const E = process.env; if (!pid) return null; if (pid === E.STRIPE_PRICE_GASTRONOMIQUE || pid === E.STRIPE_PRICE_FAMILY) return 'gastronomique'; if (pid === E.STRIPE_PRICE_HEAD_CHEF) return 'head'; if (pid === E.STRIPE_PRICE_CHEF_DE_PARTIE || pid === E.STRIPE_PRICE_MONTHLY) return 'monthly'; return null; };
 // Admin = an account whose email is listed in the server-side ADMIN_EMAILS var (comma-separated). Never client-controlled.
 const adminEmails = () => String(process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);

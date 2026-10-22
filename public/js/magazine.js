@@ -8,14 +8,14 @@ window.LPMag=(function(){
     const m=await load(true);if(m.entitled){location.href='/account.html#magazine';return}
     if(!m.available){toast('The magazine goes on sale soon — payments are not configured yet.');return}
     btn&&(btn.disabled=true);
-    try{if(m.canAdd&&confirm('Add Lux Prime Kitchen Magazine to your current plan for '+(m.price||'£3.99')+'/month? It is prorated on your next invoice and you can cancel any time.')){await api('/api/billing/checkout',{method:'POST',body:{plan:'magazine',mode:'add'}});toast('Added — welcome to the magazine!');location.href='/account.html#magazine';return}
+    try{if(m.canAdd&&confirm('Add Lux Prime Kitchen Magazine to your current plan for '+(m.price||'£3.50')+'/month? It is prorated on your next invoice and you can cancel any time.')){await api('/api/billing/checkout',{method:'POST',body:{plan:'magazine',mode:'add'}});toast('Added — welcome to the magazine!');location.href='/account.html#magazine';return}
       const {url}=await api('/api/billing/checkout',{method:'POST',body:{plan:'magazine'}});location.href=url}catch(e){toast(e.message)}finally{btn&&(btn.disabled=false)}}
   async function preview(btn,out){btn.disabled=true;const t=btn.textContent;btn.textContent='Malcolm is composing your issue… (about a minute)';out&&(out.textContent='');
     try{const r=await fetch('/api/magazine/preview',{credentials:'same-origin'});if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Preview failed')}
       const b=await r.blob();const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=(r.headers.get('content-disposition')||'').match(/filename="([^"]+)"/)?.[1]||'Lux-Prime-Kitchen-Magazine.pdf';document.body.appendChild(a);a.click();a.remove();
       out&&(out.innerHTML=`Your preview is ready — <a href="${u}" target="_blank" rel="noopener">open it</a>.`)}catch(e){out?out.textContent=e.message:toast(e.message)}finally{btn.disabled=false;btn.textContent=t}}
   const cover=(w)=>`<a href="/mag/sample.pdf" target="_blank" rel="noopener" class="mag-cover" style="${w?`max-width:${w}px`:''}"><img src="/mag/sample-cover.jpg" alt="Sample cover of Lux Prime Kitchen Magazine: a personalised monthly issue" loading="lazy" width="600" height="849"></a>`;
-  const price=m=>(m&&m.price)||'£3.99';
+  const price=m=>(m&&m.price)||'£3.50';
   const cta=(m)=>m&&m.entitled?`<a class="btn" href="/account.html#magazine">${m.viaPlan?'Included in '+esc(m.planName||'your plan'):'Your magazine'}</a>`:`<button class="btn" data-mag-buy>Get the magazine · ${price(m)}/month</button>`;
   const head=(m)=>m&&m.entitled?'':`<a class="btn ghost" href="/pricing.html#plans">Or go Head Chef / Gastronomique — magazine included</a>`;
   function wire(root){root.querySelectorAll('[data-mag-buy]').forEach(b=>b.onclick=()=>buy(b))}
