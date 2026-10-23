@@ -210,12 +210,28 @@ app.get('/api/share/:id', async c => { const r = await db(c).prepare('SELECT rec
 const IMG_MODEL = '@cf/black-forest-labs/flux-1-schnell';
 const imgInflight = new Map();
 const imgFallback = (c, row) => { const r = c.redirect(imagesMod.curatedImage({ title: row ? row.title : '' }).large, 302); r.headers.set('Cache-Control', 'no-store'); return r; };
+// Malcolm AI Image Engine first (MALCOLM binding -> POST /v1/images, preset photoreal-food), then direct Workers AI FLUX schnell.
+async function malcolmImage(env, prompt) {
+  const base = String(env.MALCOLM_AI_URL || '').replace(/\/+$/, ''); if (!env.MALCOLM || !base || !env.MALCOLM_AI_KEY || env.IMAGE_ENGINE === 'direct') throw new Error('malcolm image engine not configured');
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), +env.IMAGE_TIMEOUT_MS || 45000);
+  try {
+    const r = await env.MALCOLM.fetch(new Request(`${base}/v1/images`, { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.MALCOLM_AI_KEY}` },
+      body: JSON.stringify({ prompt, preset: 'photoreal-food', width: 1024, height: 1024, quality: env.IMAGE_QUALITY || 'standard', n: 1, enhance: false, format: 'bytes', timeout_ms: 40000 }) }));
+    if (!r.ok) throw new Error(`malcolm images HTTP ${r.status}`);
+    const ct = r.headers.get('content-type') || ''; if (!ct.startsWith('image/')) throw new Error('malcolm images non-image');
+    return { bytes: new Uint8Array(await r.arrayBuffer()), provider: `malcolm/${r.headers.get('x-malcolm-model') || 'image'}` };
+  } finally { clearTimeout(t); }
+}
 async function makeDishImage(env, row) {
   const t0 = Date.now(); let bytes, provider;
-  // Workers AI FLUX.1 schnell (Gemini image models are not on the free tier for this key: 429 quota 0).
-  const out = await env.AI.run(IMG_MODEL, { prompt: row.prompt, steps: +env.IMAGE_STEPS || 6 });
-  const b64 = out && out.image; if (!b64) throw new Error('no image');
-  bytes = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)); provider = 'workers-ai/flux-1-schnell';
+  try { ({ bytes, provider } = await malcolmImage(env, row.prompt)); if (bytes.length < 2000 || bytes.length > 6e6) throw new Error('bad image size'); }
+  catch (e) {
+    console.error('malcolm image -> direct fallback', e && e.message);
+    if (!env.AI) throw e;
+    const out = await env.AI.run(IMG_MODEL, { prompt: row.prompt, steps: +env.IMAGE_STEPS || 6 });
+    const b64 = out && out.image; if (!b64) throw new Error('no image');
+    bytes = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)); provider = 'workers-ai/flux-1-schnell';
+  }
   if (bytes.length < 2000 || bytes.length > 6e6) throw new Error('bad image size');
   await env.IMAGES.put(`dish/${row.key}.jpg`, bytes, { metadata: { provider, title: String(row.title || '').slice(0, 120) } }); // KV (R2 not enabled on the account)
   await env.DB.prepare("UPDATE dish_images SET status='done', provider=?, ms=?, error=NULL, updated_at=CURRENT_TIMESTAMP WHERE key=?").bind(provider, Date.now() - t0, row.key).run();
@@ -223,11 +239,11 @@ async function makeDishImage(env, row) {
 }
 app.get('/api/dish-image/:key', async c => {
   const key = c.req.param('key'); if (!/^[0-9a-f]{32}$/.test(key)) return c.json({ error: 'Not found' }, 404);
-  const serve = (body, extra = {}) => new Response(body, { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff', ...extra } });
+  const serve = (body, extra = {}) => new Response(body, { headers: { 'Content-Type': new Uint8Array(body.buffer || body, body.byteOffset || 0, 1)[0] === 0x89 ? 'image/png' : 'image/jpeg', 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff', ...extra } });
   if (!c.env.IMAGES) return imgFallback(c, null);
   const hit = await c.env.IMAGES.get(`dish/${key}.jpg`, 'arrayBuffer'); if (hit) return serve(hit);
   const row = await db(c).prepare('SELECT * FROM dish_images WHERE key=?').bind(key).first(); if (!row) return imgFallback(c, null);
-  const u = c.get('user'); if (!u || !c.env.AI) return imgFallback(c, row);
+  const u = c.get('user'); if (!u || !(c.env.AI || c.env.MALCOLM)) return imgFallback(c, row);
   if (await limited(c, 'img', 15, 60)) return imgFallback(c, row);
   const tier = isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : isPremium(u) ? 'member' : 'free'; const cap = dishimage.DAILY_CAPS[tier]; const day = new Date().toISOString().slice(0, 10);
   const used = await db(c).prepare('SELECT n FROM image_usage WHERE user_id=? AND day=?').bind(u.id, day).first();
