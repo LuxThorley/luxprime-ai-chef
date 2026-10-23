@@ -324,3 +324,26 @@ input[aria-invalid=true]{border-color:#e0786a}
 .vp-out{flex-basis:100%;margin:0;font-size:.85rem;min-height:1em}
 .ok-note{border-left:4px solid #4cbf73}
 @media (max-width:560px){form.reg .pw-pair{grid-template-columns:1fr}}
+
+/* ---- Ask Malcolm: answers, clarify, chat ---- */
+.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.malcolm-answer,.clarify{border-left:4px solid var(--gold,#c9a14a);margin-bottom:16px}
+.malcolm-answer .answer-t,.clarify .answer-t{margin:0;font-size:1.08rem;line-height:1.6}
+.clarify .chips{display:flex;flex-wrap:wrap;gap:.45rem;margin-top:.8rem}
+.chat{margin-top:18px;display:flex;flex-direction:column;gap:.7rem}
+.chat-head{display:flex;gap:.8rem;align-items:center}.chat-head h2{margin:0;font-size:1.3rem}.chat-head p{margin:.15rem 0 0;font-size:.88rem}
+.chat-av{font-size:1.6rem;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:color-mix(in srgb,var(--gold,#c9a14a) 22%,transparent);flex:0 0 auto}
+.chat-log{display:flex;flex-direction:column;gap:.55rem;max-height:420px;overflow-y:auto;padding:.2rem}
+.chat-log:empty{display:none}
+.msg{max-width:85%;padding:.6rem .85rem;border-radius:16px;line-height:1.5}
+.msg p{margin:0}.msg .msg-note{margin-top:.35rem;font-size:.82rem;opacity:.85}
+.msg.user{align-self:flex-end;background:var(--gold,#c9a14a);color:#24160a;border-bottom-right-radius:4px}
+.msg.malcolm{align-self:flex-start;background:color-mix(in srgb,currentColor 8%,transparent);border-bottom-left-radius:4px}
+.msg.typing p{font-style:italic;opacity:.75}
+@media (prefers-reduced-motion:no-preference){.msg.typing p{animation:lpPulse 1.2s ease-in-out infinite}}
+@keyframes lpPulse{50%{opacity:.35}}
+.chat-sugg{display:flex;flex-wrap:wrap;gap:.4rem}.chat-sugg .chip{min-height:36px;font-size:.85rem}
+.chat-form{display:flex;gap:.5rem;align-items:flex-end}
+.chat-form textarea{flex:1;min-height:46px;resize:none;line-height:1.4}
+.chat-form .btn{min-height:46px}
+@media (max-width:560px){.msg{max-width:94%}.chat-log{max-height:60vh}}

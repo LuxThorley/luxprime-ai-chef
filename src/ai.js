@@ -20,7 +20,7 @@ const Recipe = z.object({
   inspiredBy: z.union([z.string().max(40), z.number()]).nullable().optional(),
   tagline: z.string().max(200).optional(), chefSecret: z.string().max(400).optional(), pairing: z.string().max(300).optional(), nutritionPartial: z.boolean().optional()
 });
-const ResponseSchema = z.object({ recipes: z.array(Recipe).min(1).max(5), blessing: z.string().max(600).nullable().optional(), closing: z.string().max(600).nullable().optional(), provider: z.string().max(40).optional(), model: z.string().max(80).optional(), failovers: z.array(z.any()).optional() });
+const ResponseSchema = z.object({ recipes: z.array(Recipe).min(1).max(5), answer: z.string().max(1200).nullable().optional(), blessing: z.string().max(600).nullable().optional(), closing: z.string().max(600).nullable().optional(), provider: z.string().max(40).optional(), model: z.string().max(80).optional(), failovers: z.array(z.any()).optional() });
 
 function config() {
   const p = (process.env.AI_PROVIDER || 'none').toLowerCase();
@@ -52,7 +52,7 @@ const MODE_RULE = {
   blend: `\nINSPIRATION MODE = MALCOLM & ESCOFFIER: blend Escoffier's techniques and themes with your own modern creativity and contemporary flavour combinations; cite an entry via "inspiredBy" only when a recipe genuinely draws on it.`,
   malcolm: `\nINSPIRATION MODE = MALCOLM AI CHEF ONLY: free modern creativity with no Escoffier grounding; set "inspiredBy" to null.`
 };
-const BRIEF_RULE = `\nThe "brief" field is the cook's own words. Honour every explicit constraint in brief.constraints: kcalMax = max kcal per serving, proteinMin = min protein g per serving, budgetGBP = total ingredient budget in pounds, spice = heat 0-10, avoid = never use, moods = flavours/textures/occasion to deliver, memory = an experience to evoke. Treat the rest of brief.raw as creative direction. If brief.question is true, answer the question directly in 1-2 sentences in "blessing", then give the recipes.`;
+const BRIEF_RULE = `\nThe "brief" field is the cook's own words. Honour every explicit constraint in brief.constraints: kcalMax = max kcal per serving, proteinMin = min protein g per serving, budgetGBP = total ingredient budget in pounds, spice = heat 0-10, avoid = never use, moods = flavours/textures/occasion to deliver, memory = an experience to evoke. Treat the rest of brief.raw as creative direction. If brief.question is true, add a top-level "answer": a direct, specific, useful answer in 2-4 sentences (no blessing), then give the recipes.`;
 function buildUserPrompt(q, refs) {
   return JSON.stringify({ ...(refs && refs.length ? { references: refs.map(r => ({ no: r.no, title: r.title, role: r.role, text: r.text })) } : {}),
     include: q.include, exclude: q.exclude, dish: q.dish || null, maxMinutes: q.maxMinutes, difficulty: q.difficulty || 'any',
@@ -117,7 +117,7 @@ async function generate(q, { fetchImpl, retries = 2, references = [] } = {}) {
         };
       });
       if (!recipes.length) throw new Error('All AI recipes failed safety checks');
-      return { source: c.provider, recipes, blessing: parsed.blessing || null, closing: parsed.closing || null, meta: { provider: parsed.provider || null, model: parsed.model || null, failovers: (parsed.failovers || []).length } };
+      return { source: c.provider, recipes, answer: parsed.answer || null, blessing: parsed.blessing || null, closing: parsed.closing || null, meta: { provider: parsed.provider || null, model: parsed.model || null, failovers: (parsed.failovers || []).length } };
     } catch (e) {
       lastErr = e && e.name === 'AbortError' ? new Error(`AI timeout after ${+process.env.AI_TIMEOUT_MS || 60000} ms`) : e;
       messages.push({ role: 'user', content: `Your previous reply was invalid (${String(e.message).slice(0, 300)}). Reply again with ONLY valid JSON matching the schema.` });

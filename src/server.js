@@ -4,7 +4,7 @@ const path = require('path'); const crypto = require('crypto');
 const express = require('express'); const helmet = require('helmet'); const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser'); const bcrypt = require('bcryptjs'); const jwt = require('jsonwebtoken');
 const { z } = require('zod');
-const { open } = require('./db'); const verifyMod = require('./verify'); const mailer = require('./mailer'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
+const { open } = require('./db'); const verifyMod = require('./verify'); const chatMod = require('./chat'); const mailer = require('./mailer'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
 const { plans, isPremium, isAdmin, isTester } = require('./plans'); const images = require('./images');
 const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14, RECIPES } = require('./recipes'); const community = require('./community'); const CR = require('./community-routes'); const briefMod = require('./brief');
 
@@ -12,7 +12,7 @@ const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
   include: z.array(tag).max(20).default([]), exclude: z.array(tag).max(20).default([]),
-  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]),
+  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]), skipClarify: z.boolean().optional(),
   maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'),
   servings: z.coerce.number().int().min(1).max(12).default(2),
@@ -25,8 +25,9 @@ const AuthSchema = z.object({ email: z.string().trim().toLowerCase().email().max
 const RegisterSchema = AuthSchema.extend({ confirmPassword: z.string().max(200).optional() }).refine(d => d.confirmPassword === undefined || d.confirmPassword === d.password, { message: 'Passwords don’t match', path: ['confirmPassword'] });
 
 const a = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env } = {}) {
-  const opts = { fetchImpl };
+function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm = null } = {}) {
+  const opts = { fetchImpl, llm };
+  db.exec(require('./chat').RATE_SQL);
   const SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? null : 'dev-only-secret');
   if (!SECRET || (process.env.NODE_ENV === 'production' && SECRET === 'change-me')) throw new Error('Set a strong JWT_SECRET');
   if (stripe === undefined) stripe = process.env.STRIPE_SECRET_KEY ? require('stripe')(process.env.STRIPE_SECRET_KEY) : null;
@@ -136,28 +137,46 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env } = {
     actor: req.user ? 'u:' + req.user.id : 'ip:' + community.fnv(String(req.ip || 'anon')), escOne: no => escoffier.one((sql, p) => db.prepare(sql).all(...p), no) });
   const send = (res, r) => res.status(r.status).json(r.json);
   // ---- Search ----
-  app.post('/api/search', searchLimiter, needAuth, a(async (req, res) => {
-    const p = SearchSchema.safeParse(req.body); if (!p.success) return bad(res, p.error);
-    const u = req.user, prem = isPremium(u), pl = plans();
-    if (!prem && u.searches_used >= pl.free.searches) return res.status(402).json({ error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' });
-    const cuisines = community.normCuisines(p.data.cuisines, p.data.cuisine);
-    const q = { ...p.data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
-    const brief = briefMod.without(briefMod.parseBrief(p.data.dish), p.data.briefIgnore); Object.assign(q, briefMod.applyHints(q, brief)); q.brief = { raw: brief.raw, constraints: Object.fromEntries(Object.entries(brief.hints).map(([k, v]) => [k, v.value])), question: brief.question };
+  async function doSearch(u, data) {
+    const prem = isPremium(u), pl = plans();
+    if (!prem && u.searches_used >= pl.free.searches) return [402, { error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' }];
+    const cuisines = community.normCuisines(data.cuisines, data.cuisine);
+    const q = { ...data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: data.difficulty === 'any' ? null : data.difficulty, limit: prem ? 5 : pl.free.results };
+    const brief = briefMod.without(briefMod.parseBrief(data.dish), data.briefIgnore); Object.assign(q, briefMod.applyHints(q, brief)); q.brief = { raw: brief.raw, constraints: Object.fromEntries(Object.entries(brief.hints).map(([k, v]) => [k, v.value])), question: brief.question };
+    const cl = data.skipClarify ? null : chatMod.clarify(q); if (cl) return [200, { clarify: cl, recipes: [], inspirationMode: q.inspirationMode, understood: [], user: publicUser(u) }];
     try { q.inspiration = await community.inspiration(cq, u.id); } catch {}
     if (q.kidsMode && !prem) q.kidsMode = true; // kids mode allowed in trial so families can try it
     const all = (sql, params) => db.prepare(sql).all(...params);
     let references = []; try { references = await (q.inspirationMode === 'malcolm' && !q.escoffier ? [] : escoffier.references(all, q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e.message); }
-    const out = await ai.generate(q, { references });
+    const [out, answer] = await Promise.all([ai.generate(q, { references }), chatMod.answerBrief(q.brief, q, { llm: opts.llm }).catch(() => null)]);
     const recipes = out.recipes.map(r => {
       const img = images.curatedImage(r);
       if (out.source !== 'offline' && images.imageEnabled()) { img.src = img.large = `/api/dish-image?title=${encodeURIComponent(r.title)}`; img.generated = true; img.fallback = images.curatedImage(r).src; }
       return { ...r, image: img, safetyNotes: safetyNotes(r, q) };
     });
     db.prepare('UPDATE users SET searches_used = searches_used + 1 WHERE id=?').run(u.id);
-    db.prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').run(u.id, JSON.stringify(p.data), recipes.map(r => r.title).join(' · '));
+    db.prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').run(u.id, JSON.stringify(data), recipes.map(r => r.title).join(' · '));
     const fresh = db.prepare('SELECT * FROM users WHERE id=?').get(u.id);
-    res.json({ source: out.source, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, inspirationMode: q.inspirationMode, understood: briefMod.summary(brief), question: brief.question, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
+    return [200, { source: out.source, answer: answer || out.answer || null, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, inspirationMode: q.inspirationMode, understood: briefMod.summary(brief), question: brief.question, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) }];
+  }
+  app.post('/api/chat', searchLimiter, needAuth, a(async (req, res) => {
+    const p = chatMod.ChatRequest.safeParse(req.body); if (!p.success) return bad(res, p.error); const u = req.user; const r = p.data;
+    const lim = await chatMod.allow(cq, `chat:u${u.id}`, isPremium(u) ? chatMod.LIMITS.paid : chatMod.LIMITS.free);
+    if (!lim.ok) return res.status(429).json({ error: `Malcolm needs a breather — you've reached this hour's chat limit${isPremium(u) ? '' : ' (upgrade for more)'}. Try again in ${Math.ceil(lim.retryAfter / 60)} min.`, retryAfter: lim.retryAfter });
+    const out = await chatMod.respond(r, { llm: opts.llm });
+    const base = { reply: out.reply, action: out.action, suggestions: out.suggestions, chatLeft: lim.left };
+    if (out.action !== 'regenerate' || r.recipe) return res.json({ ...base, action: out.action === 'regenerate' ? 'answer' : out.action, context: r.context });
+    const s = SearchSchema.safeParse({ ...chatMod.applyChanges(r.context, out.changes), skipClarify: true });
+    if (!s.success) return res.json({ ...base, action: 'answer', context: r.context });
+    const [st, payload] = await doSearch(u, s.data);
+    if (st !== 200) return res.json({ ...base, action: 'answer', reply: payload.error || out.reply, upgrade: payload.upgrade, context: r.context });
+    res.json({ ...base, context: s.data, search: payload });
   }));
+  app.post('/api/search', searchLimiter, needAuth, a(async (req, res) => {
+    const p = SearchSchema.safeParse(req.body); if (!p.success) return bad(res, p.error);
+    const [st, payload] = await doSearch(req.user, p.data); res.status(st).json(payload);
+  }));
+
 
   // ---- Escoffier Classics (public domain, 1907) ----
   const escAll = (sql, params) => db.prepare(sql).all(...params);

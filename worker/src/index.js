@@ -17,6 +17,7 @@ import community from '../../src/community.js';
 import CRmod from '../../src/community-routes.js';
 const CR = CRmod;
 import briefMod from '../../src/brief.js';
+import chat from '../../src/chat.js';
 import verifyMod from '../../src/verify.js';
 import mailer from '../../src/mailer.js';
 
@@ -25,7 +26,7 @@ const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
   include: z.array(tag).max(20).default([]), exclude: z.array(tag).max(20).default([]),
-  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
+  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]), skipClarify: z.boolean().optional(), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'), servings: z.coerce.number().int().min(1).max(12).default(2),
   diets: z.array(z.enum(DIETS)).max(6).default([]), excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
   cuisine: z.string().trim().max(40).default('any'), cuisines: z.array(z.string().trim().min(1).max(40).regex(/^[\p{L} '\-&()]+$/u)).max(8).default([]), kidsMode: z.boolean().default(false),
@@ -175,19 +176,20 @@ app.get('/api/health', c => c.json({ ok: true, runtime: 'cloudflare-workers', ai
 app.get('/api/plans', c => { const s = !!c.env.STRIPE_SECRET_KEY; const m = plansMod.magazine(); return c.json({ plans: Object.values(plans()).map(({ priceId, annualPriceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(s && priceId), availableAnnual: p.id === 'free' || !!(s && annualPriceId) })), magazine: { price: m.price, annualPrice: m.annualPrice, savePct: m.savePct } }); });
 app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...RECIPES.map(r => r.cuisine), ...community.FUSION_CUISINES])].sort()] }));
 
-app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
-  const p = SearchSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
-  const u = c.get('user'), prem = isPremium(u), pl = plans();
-  if (!prem && u.searches_used >= pl.free.searches) return c.json({ error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' }, 402);
-  const cuisines = community.normCuisines(p.data.cuisines, p.data.cuisine);
-  const q = { ...p.data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
-  const brief = briefMod.without(briefMod.parseBrief(p.data.dish), p.data.briefIgnore); Object.assign(q, briefMod.applyHints(q, brief)); q.brief = { raw: brief.raw, constraints: Object.fromEntries(Object.entries(brief.hints).map(([k, v]) => [k, v.value])), question: brief.question };
+// Core search, shared by /api/search and Ask Malcolm regenerations. Returns [status, payload].
+async function doSearch(c, u, data) {
+  const prem = isPremium(u), pl = plans();
+  if (!prem && u.searches_used >= pl.free.searches) return [402, { error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' }];
+  const cuisines = community.normCuisines(data.cuisines, data.cuisine);
+  const q = { ...data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: data.difficulty === 'any' ? null : data.difficulty, limit: prem ? 5 : pl.free.results };
+  const brief = briefMod.without(briefMod.parseBrief(data.dish), data.briefIgnore); Object.assign(q, briefMod.applyHints(q, brief)); q.brief = { raw: brief.raw, constraints: Object.fromEntries(Object.entries(brief.hints).map(([k, v]) => [k, v.value])), question: brief.question };
+  const cl = data.skipClarify ? null : chat.clarify(q); if (cl) return [200, { clarify: cl, recipes: [], inspirationMode: q.inspirationMode, understood: [], user: publicUser(u) }];
   try { q.inspiration = await community.inspiration(cq(c), u.id); } catch {}
   // Same-account workers.dev subrequests are blocked, so reach the Malcolm worker through its service binding.
   const mBase = String(c.env.MALCOLM_AI_URL || '').replace(/\/+$/, '');
   const fetchImpl = (url, opts) => (c.env.MALCOLM && mBase && String(url).startsWith(mBase)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
   let references = []; try { references = await (q.inspirationMode === 'malcolm' && !q.escoffier ? [] : escoffier.references(d1all(c), q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e && e.message); }
-  const out = await ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1), references });
+  const [out, answer] = await Promise.all([ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1), references }), chat.answerBrief(q.brief, q, { llm: chat.workersAiLlm(c.env) }).catch(() => null)]);
   let recipes = out.recipes.map(r => ({ ...r, image: imagesMod.curatedImage(r), safetyNotes: safetyNotes(r, q) }));
   // AI dishes get an AI photo, generated lazily by GET /api/dish-image/:key (never blocks the recipe text).
   if (out.source !== 'offline' && c.env.IMAGES && c.env.AI) {
@@ -201,9 +203,26 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   }
   await db(c).batch([
     db(c).prepare('UPDATE users SET searches_used = searches_used + ? WHERE id=?').bind(prem ? 0 : 1, u.id), // Commis Chef allowance only counts non-paid, non-trial searches
-    db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify(p.data), recipes.map(r => r.title).join(' · '))]);
+    db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify(data), recipes.map(r => r.title).join(' · '))]);
   const fresh = await members.effectiveUser(db(c), await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first());
-  return c.json({ source: out.source, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, inspirationMode: q.inspirationMode, understood: briefMod.summary(brief), question: brief.question, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
+  return [200, { source: out.source, answer: answer || out.answer || null, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, inspirationMode: q.inspirationMode, understood: briefMod.summary(brief), question: brief.question, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) }];
+}
+app.post('/api/chat', rl('chat-ip', 30, 300), needAuth, async c => {
+  const p = chat.ChatRequest.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user'); const req = p.data;
+  const lim = await chat.allow(cq(c), `chat:u${u.id}`, isPremium(u) ? chat.LIMITS.paid : chat.LIMITS.free);
+  if (!lim.ok) return c.json({ error: `Malcolm needs a breather — you've reached this hour's chat limit${isPremium(u) ? '' : ' (upgrade for more)'}. Try again in ${Math.ceil(lim.retryAfter / 60)} min.`, retryAfter: lim.retryAfter, ...(isPremium(u) ? {} : { upgrade: '/pricing.html' }) }, 429);
+  const out = await chat.respond(req, { llm: chat.workersAiLlm(c.env) });
+  const base = { reply: out.reply, action: out.action, suggestions: out.suggestions, chatLeft: lim.left };
+  if (out.action !== 'regenerate' || req.recipe) return c.json({ ...base, action: out.action === 'regenerate' ? 'answer' : out.action, context: req.context });
+  const s = SearchSchema.safeParse({ ...chat.applyChanges(req.context, out.changes), skipClarify: true });
+  if (!s.success) return c.json({ ...base, action: 'answer', context: req.context });
+  const [st, payload] = await doSearch(c, u, s.data);
+  if (st !== 200) return c.json({ ...base, action: 'answer', reply: payload.error || out.reply, upgrade: payload.upgrade, context: req.context });
+  return c.json({ ...base, context: s.data, search: payload });
+});
+app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
+  const p = SearchSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
+  const [st, payload] = await doSearch(c, c.get('user'), p.data); return c.json(payload, st);
 });
 
 // Escoffier Classics (public domain, 1907) — browse/search + single entry.
