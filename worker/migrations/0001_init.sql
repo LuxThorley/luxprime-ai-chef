@@ -1,4 +1,4 @@
--- Lux Prime Kitchen AI Chef — D1 schema
+-- AIchef.food — D1 schema
 CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, name TEXT,
   plan TEXT NOT NULL DEFAULT 'free', sub_status TEXT, stripe_customer_id TEXT, stripe_subscription_id TEXT,
   searches_used INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);

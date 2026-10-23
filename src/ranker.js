@@ -48,7 +48,7 @@ function rank(q, { limit = 5, pool = RECIPES } = {}) {
     // difficulty (0-8)
     if (diff) { const d = Math.abs(DIFF[r.difficulty] - DIFF[diff]); score += [8, 3, 0][d]; if (!d) why.push(`${r.difficulty} difficulty as requested`); } else score += 5;
     // cuisine (0-5)
-    if (q.cuisine && q.cuisine !== 'any') { if (norm(r.cuisine) === norm(q.cuisine)) { score += 5; why.push(`${r.cuisine} cuisine`); } }
+    { const cs = (q.cuisines && q.cuisines.length ? q.cuisines : (q.cuisine && q.cuisine !== 'any' ? [q.cuisine] : [])).map(norm); if (cs.length && cs.includes(norm(r.cuisine))) { score += 5; why.push(`${r.cuisine} cuisine`); } }
     // kids (0-5)
     if (q.kidsMode) { if (r.kidFriendly) { score += 5; why.push('kid-friendly'); } else score -= 5; }
     if (diets.length) why.push(`suits ${diets.join(', ')}`);

@@ -1,4 +1,4 @@
-# Lux Prime Kitchen — AI Chef (powered by Malcolm AI)
+# AIchef.food — AI Chef (powered by Malcolm AI)
 
 **Live preview:** https://luxthorley.github.io/luxprime-ai-chef/
 
@@ -123,7 +123,7 @@ generated on demand via `/api/dish-image?title=…`, cached in `IMAGE_CACHE_DIR`
 
 ## Stripe setup (use TEST mode first)
 1. Create four Products in Stripe, each with two recurring GBP Prices (monthly / annual): Chef de Partie £4.99 / £49,
-   Head Chef £7.99 / £79, Gastronomique £11.99 / £119, Lux Prime Kitchen Magazine add-on £3.49 / £34.90. Copy the `price_…` IDs into
+   Head Chef £7.99 / £79, Gastronomique £11.99 / £119, AIchef.food Magazine add-on £3.49 / £34.90. Copy the `price_…` IDs into
    `STRIPE_PRICE_CHEF_DE_PARTIE`, `STRIPE_PRICE_HEAD_CHEF`, `STRIPE_PRICE_GASTRONOMIQUE`, `STRIPE_PRICE_MAGAZINE` and the
    matching `…_ANNUAL` variables (`STRIPE_PRICE_CHEF_DE_PARTIE_ANNUAL`, `STRIPE_PRICE_HEAD_CHEF_ANNUAL`, `STRIPE_PRICE_GASTRONOMIQUE_ANNUAL`, `STRIPE_PRICE_MAGAZINE_ANNUAL`);
    put your `sk_test_…` key in `STRIPE_SECRET_KEY`. (Legacy `STRIPE_PRICE_MONTHLY`/`STRIPE_PRICE_FAMILY` still work as fallbacks.)
@@ -154,3 +154,37 @@ Set `NODE_ENV=production` (secure cookies) and `APP_URL` to the HTTPS domain.
 * Trade mark clearance for "Lux Prime" (a similar mark, LUXXPRIME, exists).
 * Allergen and nutrition data are guidance/estimates; keep the disclaimers.
 * Images in `public/img` are AI-generated; replace with commissioned photography if you need strong IP protection.
+
+## Ratings, favourites and the "Chef of Kings" ranking
+
+**Data (D1 migration `0008_community.sql`, additive):** `recipes` (stable id → full recipe JSON + image key, first writer wins),
+`ratings` (one row per member per recipe, 1–5, editable), `recipe_events` (view / cook / share / pdf, deduped per actor·recipe·kind·UTC day),
+`user_prefs` (synced diet, servings, cuisines, difficulty, time, kids mode, recent searches). Existing `favourites` rows are kept and back-filled into `recipes`.
+
+**Stable IDs:** library recipes keep their slug; AI recipes are `ai-` + a 64-bit FNV-1a hash of the normalised title and sorted ingredient names,
+so the same dish always gets the same id and a client can't attach a rating to tampered content (the server recomputes the hash); Escoffier entries are `esc-<no>`, built server-side.
+
+**Displayed rating:** plain arithmetic mean of all stars, shown to 3 decimal places, plus the count.
+
+**Ranking score** (`src/community.js → scoreRecipes`, constants in `K`):
+
+* Each rating has a trust weight *w*: 1 normally; 0.25 for admin/tester accounts; 0.5 for the member who first saved the recipe; 0.3 for accounts younger than 3 days.
+  If a recipe receives ≥ 5 ratings from new accounts within 24 h, those ratings get *w* = 0 (spike filter). One rating per account (primary key); max 40 rating changes per member per hour, plus per-IP rate limits.
+* **Bayesian average** `B = (C·m + Σ w·r) / (C + Σ w)` with prior weight `C = 5` and `m` = global weighted mean (3.5 if no data).
+* **Consistency** `1 − 0.04·σ` where σ is the weighted standard deviation of the stars.
+* **Engagement** `E = 0.20·ln(1+distinct raters) + 0.15·ln(1+hearts) + 0.25·ln(1+“I made this”) + 0.10·ln(1+shares+PDFs) + 0.05·ln(1+views)`.
+* **Recency** `ρ = 0.5^(days since last activity / 60)`.
+* **Score** `= B·(1 − 0.04σ) + E·(0.4 + 0.6ρ)`; ties broken by rating count. A recipe needs ratings from ≥ 2 distinct trusted members to be ranked.
+  The top 10 is cached for 60 s per isolate and shown on the homepage; ranked recipes get a “Featured #n” badge everywhere.
+
+**Malcolm context (additive):** each search passes the current top 5 (title, cuisine, average, count) as optional inspiration and the member's 5 latest hearted titles; the request always wins.
+
+**Cuisine fusion:** the app sends `cuisines: [...]` (up to 8); with two or more, Malcolm is told to create genuine fusion dishes and label the cuisine “A–B fusion”.
+
+## Email (verification, magazine, household invites)
+All outbound site email goes through one helper, `src/mailer.js` (Resend HTTPS API, works in Node and Workers).
+- **From:** `"Malcolm · AIchef.food" <malcolm@aichef.food>` by default; override with `MAIL_FROM` (falls back to the legacy `MAGAZINE_FROM`). **Reply-To:** `malcolm@aichef.food` (`MAIL_REPLY_TO`).
+- **Inactive until the `RESEND_API_KEY` secret is set.** Until then sign-ups show "verification pending" and the site works normally.
+- **Before setting the key, verify the `aichef.food` domain in Resend** (Resend → Domains → add `aichef.food`) and add the DNS records it gives you at the DNS host: the SPF `TXT` (and the MX record on the `send` subdomain), the DKIM `TXT` (`resend._domainkey`), and a DMARC `TXT` at `_dmarc.aichef.food` (start with `v=DMARC1; p=none; rua=mailto:malcolm@aichef.food`). Resend rejects mail from unverified domains (HTTP 403).
+- **Email verification:** sign-up emails a single-use link (`/account.html?verify=…`, valid 24h). Only the SHA-256 of the token is stored (`email_tokens`, migration `0009`). Migration 0009 marks every existing account verified and sends nothing. Unverified members can use the site, but their ratings carry no weight in rankings, and they can't receive the magazine by email or send/accept household invites.
+- Tests strip `RESEND_API_KEY` from the environment (`test/helpers/no-mail.js`), so they never reach Resend.

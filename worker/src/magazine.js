@@ -1,4 +1,4 @@
-// Lux Prime Kitchen Magazine — Worker side: entitlement, issue generation (Malcolm + FLUX + PDF), storage (KV), email (Resend).
+// AIchef.food Magazine — Worker side: entitlement, issue generation (Malcolm + FLUX + PDF), storage (KV), email (Resend).
 import mag from '../../src/magazine.js';
 import ai from '../../src/ai.js';
 import escoffier from '../../src/escoffier.js';
@@ -6,6 +6,8 @@ import dishimage from '../../src/dishimage.js';
 import imagesMod from '../../src/images.js';
 import plansMod from '../../src/plans.js';
 import { randomId } from './crypto.js';
+import mailer from '../../src/mailer.js';
+import verifyMod from '../../src/verify.js';
 import { effectiveUser } from './members.js';
 
 const { isAdmin, isTester } = plansMod;
@@ -38,7 +40,8 @@ export async function buildIssue(env, user, { fetchImpl, issueNo = 1, manageUrl,
   const t0 = Date.now(); const all = async (sql, p) => (await env.DB.prepare(sql).bind(...p).all()).results;
   const [history, favourites] = await Promise.all([all('SELECT query_json FROM history WHERE user_id=? ORDER BY id DESC LIMIT 60', [user.id]), all('SELECT recipe_json FROM favourites WHERE user_id=? ORDER BY id DESC LIMIT 30', [user.id])]);
   const profile = mag.buildProfile({ history, favourites, user }, now); const q = mag.buildQuery(profile);
-  let references = []; try { references = await escoffier.references(all, q, {}); } catch (e) { console.error('mag escoffier', e && e.message); }
+  try { const pr = (await all('SELECT prefs_json FROM user_prefs WHERE user_id=?', [user.id]))[0]; const m = pr && JSON.parse(pr.prefs_json).inspirationMode; if (['escoffier', 'blend', 'malcolm'].includes(m)) q.inspirationMode = m; } catch {}
+  let references = []; try { if (q.inspirationMode !== 'malcolm') references = await escoffier.references(all, q, q.inspirationMode === 'escoffier' ? { top: 5 } : {}); } catch (e) { console.error('mag escoffier', e && e.message); }
   const out = await ai.generate(q, { fetchImpl, retries: 0, references });
   if ((out.source === 'offline' || out.fallbackReason) && !allowLibrary) throw new Error('AI_BUSY');
   const recipes = out.recipes.slice(0, 3).map(r => ({ ...r, _pairing: mag.pairing(r) }));
@@ -50,34 +53,33 @@ export async function buildIssue(env, user, { fetchImpl, issueNo = 1, manageUrl,
   const escNo = (recipes.find(r => r.escoffier) || {}).escoffier; let entry = null; if (escNo) { try { entry = await escoffier.getEntry(all, escNo.no); } catch {} }
   const fontFiles = Object.fromEntries(await Promise.all(FONT_KEYS.map(async k => [k, await asset(env, `/mag/${k}.bin`)])));
   const data = { profile, recipes, shop: mag.shoppingList(recipes, profile), issueNo, manageUrl, blessing: out.blessing, escoffierNote: mag.escoffierNote(recipes, entry ? { ...entry, title: escoffier.titleCase(entry.title) } : null, profile) };
-  const pdf = mag.render(data, { hero, dishes: dishImgs }, fontFiles);
+  const mark = await asset(env, '/img/brand/mark-ink.jpg').catch(() => null);
+  const pdf = mag.render(data, { hero, dishes: dishImgs, mark }, fontFiles);
   return { pdf, profile, titles: recipes.map(r => r.title), ms: Date.now() - t0, aiMs: tAI, source: out.source };
 }
 
 // Store an issue in KV behind an unguessable token (download link in the email; 400-day expiry).
 export async function storeIssue(env, pdf) { const token = randomId(24); await env.IMAGES.put(`mag/${token}.pdf`, pdf, { expirationTtl: 400 * 86400 }); return token; }
 
-// Email via Resend (only provider that can mail arbitrary addresses from Workers here). Inactive until RESEND_API_KEY + MAGAZINE_FROM exist.
-export const emailReady = env => !!(env.RESEND_API_KEY && env.MAGAZINE_FROM);
+// All mail goes through src/mailer.js (Resend; From "Malcolm · AIchef.food" <malcolm@aichef.food> unless MAIL_FROM/MAGAZINE_FROM). Inactive until RESEND_API_KEY exists.
+export const emailReady = env => mailer.ready(env);
 export async function sendIssueEmail(env, { to, name, month, year, titles, downloadUrl, unsubUrl, manageUrl, pdf }) {
   if (!emailReady(env)) return { sent: false, reason: 'email-not-configured' };
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const html = `<div style="background:#16171b;padding:32px 0;font-family:Georgia,'Times New Roman',serif"><div style="max-width:560px;margin:0 auto;background:#fbf8f2;padding:36px 40px;color:#25211c">
-<p style="font:600 11px/1 Arial,sans-serif;letter-spacing:4px;color:#a8683e;margin:0 0 18px">LUX PRIME KITCHEN MAGAZINE</p>
+  let origin = ''; try { origin = new URL(downloadUrl).origin; } catch {}
+  const html = `<div style="background:#1b1020;padding:32px 0;font-family:Georgia,'Times New Roman',serif"><div style="max-width:560px;margin:0 auto;background:#fbf8f2;padding:36px 40px;color:#25211c">
+<p style="margin:0 0 14px"><img src="${esc(origin)}/img/brand/logo-email.png" width="220" height="47" alt="AIchef.food" style="display:block;border:0"></p><p style="font:600 11px/1 Arial,sans-serif;letter-spacing:4px;color:#b8650f;margin:0 0 18px">AICHEF.FOOD MAGAZINE · THE LUX PRIME KITCHEN EDITION</p>
 <h1 style="font-weight:normal;font-style:italic;font-size:34px;margin:0 0 6px">Your ${esc(month)} issue</h1>
 <p style="font-size:17px;line-height:1.5">Dear ${esc(name)}, Malcolm has composed this month’s issue just for you:</p>
 <ul style="font-size:17px;line-height:1.6">${titles.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
 <p style="font-size:16px;line-height:1.5">Plus your aisle-by-aisle shopping list, wine pairings and this month’s Escoffier note.</p>
-<p style="margin:26px 0"><a href="${esc(downloadUrl)}" style="background:#c9a35a;color:#16171b;text-decoration:none;padding:13px 22px;font:600 14px Arial,sans-serif;letter-spacing:1px">DOWNLOAD YOUR MAGAZINE (PDF)</a></p>
-<p style="font:12px/1.6 Arial,sans-serif;color:#7a7065">You’re receiving this because you opted in to Lux Prime Kitchen Magazine. <a href="${esc(unsubUrl)}" style="color:#7a7065">Unsubscribe from these emails</a> · <a href="${esc(manageUrl)}" style="color:#7a7065">Manage or cancel your add-on</a>.</p>
+<p style="margin:26px 0"><a href="${esc(downloadUrl)}" style="background:#f29a1f;color:#2a1104;text-decoration:none;padding:13px 22px;border-radius:999px;font:600 14px Arial,sans-serif;letter-spacing:1px">DOWNLOAD YOUR MAGAZINE (PDF)</a></p>
+<p style="font:12px/1.6 Arial,sans-serif;color:#7a7065">You’re receiving this because you opted in to AIchef.food Magazine. <a href="${esc(unsubUrl)}" style="color:#7a7065">Unsubscribe from these emails</a> · <a href="${esc(manageUrl)}" style="color:#7a7065">Manage or cancel your add-on</a>.</p>
 </div></div>`;
-  const body = { from: env.MAGAZINE_FROM, to: [to], subject: `Your Lux Prime Kitchen Magazine — ${month} ${year}`, html,
-    text: `Dear ${name},\n\nYour ${month} issue of Lux Prime Kitchen Magazine is ready: ${titles.join('; ')}.\nDownload: ${downloadUrl}\n\nUnsubscribe: ${unsubUrl}\nManage or cancel: ${manageUrl}\n`,
-    headers: { 'List-Unsubscribe': `<${unsubUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } };
-  if (pdf && pdf.length < 8e6 && typeof pdf.toBase64 === 'function') body.attachments = [{ filename: `Lux-Prime-Kitchen-Magazine-${month}-${year}.pdf`, content: pdf.toBase64() }];
-  const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(`Resend ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  return { sent: true, id: (await r.json()).id };
+  const attachments = pdf && pdf.length < 8e6 && typeof pdf.toBase64 === 'function' ? [{ filename: `Lux-Prime-Kitchen-Magazine-${month}-${year}.pdf`, content: pdf.toBase64() }] : undefined;
+  return mailer.send(env, { to, subject: `Your AIchef.food Magazine — ${month} ${year}`, html,
+    text: `Dear ${name},\n\nYour ${month} issue of AIchef.food Magazine is ready: ${titles.join('; ')}.\nDownload: ${downloadUrl}\n\nUnsubscribe: ${unsubUrl}\nManage or cancel: ${manageUrl}\n`,
+    headers: { 'List-Unsubscribe': `<${unsubUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' }, attachments });
 }
 
 const londonParts = d => Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(d).map(p => [p.type, p.value]));
@@ -87,7 +89,7 @@ export const issueMonth = (d = new Date()) => { const p = londonParts(d); return
 export async function tick(env, { fetchImpl, base, batch = 1 }) {
   const now = new Date(); const lp = londonParts(now); const month = issueMonth(now); const log = { month, enqueued: 0, processed: [] };
   if (+lp.day === 1 && +lp.hour >= 8) {
-    const { results } = await env.DB.prepare("SELECT u.* FROM users u JOIN magazine_subs m ON m.user_id=u.id WHERE m.opt_in=1").all();
+    const { results } = await env.DB.prepare("SELECT u.* FROM users u JOIN magazine_subs m ON m.user_id=u.id WHERE m.opt_in=1 AND u.email_verified=1").all();
     for (const u0 of results) { const u = await effectiveUser(env.DB, u0); const row = await magRow(env, u.id); if (u._trial || !entitled(u, row)) continue;
       const r = await env.DB.prepare("INSERT OR IGNORE INTO magazine_issues(user_id,month,kind,status) VALUES(?,?,'monthly','pending')").bind(u.id, month).run(); log.enqueued += r.meta.changes || 0; }
   }
@@ -99,7 +101,7 @@ export async function tick(env, { fetchImpl, base, batch = 1 }) {
       let u = await effectiveUser(env.DB, await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(it.user_id).first()); const row = await magRow(env, it.user_id); const sample = it.kind === 'sample';
       // 'sample' rows are created by an operator in D1 only: build + store, never email. The shared tester appears as "Alex".
       if (sample && u && isTester(u)) u = { ...u, name: 'Alex' };
-      if (!u || (!sample && (!row || !row.opt_in || u._trial || !entitled(u, row)))) { /* trial = on-demand preview only, no emailed issues */ await env.DB.prepare("UPDATE magazine_issues SET status='skipped' WHERE id=?").bind(it.id).run(); continue; }
+      if (!u || (!sample && (!row || !row.opt_in || !verifyMod.isVerified(u) || u._trial || !entitled(u, row)))) { /* trial = on-demand preview only, no emailed issues */ await env.DB.prepare("UPDATE magazine_issues SET status='skipped' WHERE id=?").bind(it.id).run(); continue; }
       const n = ((await env.DB.prepare("SELECT COUNT(*) n FROM magazine_issues WHERE user_id=? AND kind='monthly' AND status='sent'").bind(u.id).first()) || {}).n || 0;
       const manageUrl = `${base}/account.html#magazine`;
       const iss = await buildIssue(env, u, { fetchImpl, issueNo: n + 1, manageUrl, allowLibrary: it.attempts >= 2 });

@@ -1,5 +1,5 @@
 'use strict';
-// Tiny dependency-free PDF writer for the Lux Prime Kitchen Magazine.
+// Tiny dependency-free PDF writer for the AIchef.food Magazine.
 // Built for the Workers CPU budget: fonts are pre-deflated TrueType (embedded verbatim), photos are JPEG (DCTDecode, embedded
 // verbatim), text is WinAnsi with build-time widths. No parsing, subsetting or compression at runtime.
 const METRICS = require('./magfonts.json');
@@ -75,7 +75,7 @@ class Page {
 }
 
 class Doc {
-  constructor({ title = 'Document', author = 'Lux Prime Kitchen', fontFiles = {} } = {}) { this.pages = []; this.images = []; this.gstates = new Set(); this.meta = { title, author }; this.fontFiles = fontFiles; }
+  constructor({ title = 'Document', author = 'AIchef.food', fontFiles = {} } = {}) { this.pages = []; this.images = []; this.gstates = new Set(); this.meta = { title, author }; this.fontFiles = fontFiles; }
   page(w = 595.28, h = 841.89) { const p = new Page(this, w, h); this.pages.push(p); return p; }
   addJpeg(bytes) { const i = jpegInfo(bytes); const img = { name: 'Im' + (this.images.length + 1), bytes, ...i }; this.images.push(img); return img; }
   save() {
@@ -105,7 +105,7 @@ class Doc {
     const pdfStr = s => '(' + String(s).replace(/[^\x20-\x7e]/g, '').replace(/([()\\])/g, '\\$1') + ')';
     add(catalog, `<< /Type /Catalog /Pages ${pagesId} 0 R /ViewerPreferences << /DisplayDocTitle true >> >>`);
     add(pagesId, `<< /Type /Pages /Kids [${pageIds.map(i => i + ' 0 R').join(' ')}] /Count ${pageIds.length} >>`);
-    add(info, `<< /Title ${pdfStr(this.meta.title)} /Author ${pdfStr(this.meta.author)} /Producer (Lux Prime Kitchen) /CreationDate (D:${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}Z) >>`);
+    add(info, `<< /Title ${pdfStr(this.meta.title)} /Author ${pdfStr(this.meta.author)} /Producer (AIchef.food) /CreationDate (D:${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}Z) >>`);
     push('%PDF-1.7\n'); push(new Uint8Array([37, 226, 227, 207, 211, 10]));
     objs.sort((a, b) => a.id - b.id);
     for (const o of objs) {

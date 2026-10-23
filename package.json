@@ -1,7 +1,7 @@
 {
   "name": "luxprime-ai-chef",
   "version": "1.0.0",
-  "description": "Lux Prime Kitchen AI Chef - subscription recipe service powered by Malcolm AI",
+  "description": "AIchef.food - subscription recipe service powered by Malcolm AI",
   "main": "src/server.js",
   "type": "commonjs",
   "engines": {
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test test/",
+    "test": "node --require ./test/helpers/no-mail.js --test test/",
     "build:static": "node scripts/build-static.js"
   },
   "dependencies": {

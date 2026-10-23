@@ -11,8 +11,9 @@
   "kv_namespaces": [{ "binding": "IMAGES", "id": "5c55cc965cd84e10b497323a7cc43181" }],
   "ai": { "binding": "AI" },
   "triggers": { "crons": ["17 3 * * *", "*/20 * * * *"] },
-  "vars": { "AI_PROVIDER": "malcolm", "MALCOLM_AI_URL": "https://malcolmai-live.oliverluxthorley.workers.dev/", "MALCOLM_AI_MODE": "lattice", "AI_TIMEOUT_MS": "70000", "AI_RETRIES": "0", "IMAGE_PROVIDER": "none", "ADMIN_EMAILS": "oliverthorley@hotmail.co.uk", "TESTER_EMAILS": "test@luxprime.chef" },
+  "vars": { "AI_PROVIDER": "malcolm", "MALCOLM_AI_URL": "https://malcolmai-live.oliverluxthorley.workers.dev/", "MALCOLM_AI_MODE": "lattice", "AI_TIMEOUT_MS": "70000", "AI_RETRIES": "0", "IMAGE_PROVIDER": "none", "ADMIN_EMAILS": "oliverthorley@hotmail.co.uk", "TESTER_EMAILS": "test@luxprime.chef", "MAIL_FROM": "Malcolm · AIchef.food <malcolm@aichef.food>", "MAIL_REPLY_TO": "malcolm@aichef.food" },
   "observability": { "enabled": true }
   // Secrets (wrangler secret put / dashboard): MALCOLM_AI_KEY, JWT_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
-  // STRIPE_PRICE_MONTHLY, STRIPE_PRICE_FAMILY, APP_URL (optional custom domain)
+  // STRIPE_PRICE_MONTHLY, STRIPE_PRICE_FAMILY, APP_URL (optional custom domain),
+  // RESEND_API_KEY (all site email via src/mailer.js; inactive until set — requires the aichef.food domain verified in Resend)
 }

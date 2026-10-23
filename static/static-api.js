@@ -1,7 +1,7 @@
 'use strict';
 // Static (GitHub Pages) edition: replaces the server API with an in-browser engine. No accounts, no payments.
 (function(){
-  const E=window.LPEngine, COMING='Coming soon – full service. Accounts and subscriptions launch with the full Lux Prime Kitchen server.';
+  const E=window.LPEngine, COMING='Coming soon – full service. Accounts and subscriptions launch with the full AIchef.food server.';
   const DIETS=['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
   const user={id:0,name:'Guest',email:'',plan:'static',premium:false,searchesLeft:'unlimited',static:true};
   const b64e=s=>btoa(unescape(encodeURIComponent(s))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
@@ -26,6 +26,6 @@
   }
   LP.api=api;LP.STATIC=true;LP.COMING=COMING;
   document.addEventListener('DOMContentLoaded',()=>{const b=document.createElement('div');b.className='note no-print';b.style.cssText='margin:0;border-radius:0;text-align:center;padding:8px 14px;font-size:.9rem';
-    b.innerHTML='Preview edition · runs on the Lux Prime curated library in your browser. <strong>Coming soon – full service</strong> with Malcolm AI, accounts and subscriptions.';
+    b.innerHTML='Preview edition · runs on the AIchef.food curated library in your browser. <strong>Coming soon – full service</strong> with Malcolm AI, accounts and subscriptions.';
     const h=document.getElementById('site-header');h&&h.after(b)});
 })();

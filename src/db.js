@@ -15,6 +15,10 @@ function open(file = process.env.DB_PATH || path.join(__dirname, '..', 'data', '
     query_json TEXT NOT NULL, titles TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
   CREATE TABLE IF NOT EXISTS shares (id TEXT PRIMARY KEY, recipe_json TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
   CREATE TABLE IF NOT EXISTS stripe_events (id TEXT PRIMARY KEY, created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
+  const cols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+  if (!cols.includes('email_verified')) { db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN verified_at INTEGER'); db.prepare('UPDATE users SET email_verified=1, verified_at=?').run(Date.now()); }
+  require('./verify').SCHEMA_SQL.forEach(sql => db.exec(sql));
+  require('./community').SCHEMA_SQL.forEach(sql => db.exec(sql));
   loadEscoffier(db);
   return db;
 }

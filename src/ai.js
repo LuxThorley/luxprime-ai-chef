@@ -36,7 +36,7 @@ function config() {
 }
 function aiEnabled() { const c = config(); return c.provider !== 'none' && !!c.url; }
 
-const SYSTEM = `You are the Lux Prime Kitchen AI Chef (powered by Malcolm AI). Return ONLY JSON matching:
+const SYSTEM = `You are Malcolm, the AI chef of AIchef.food. Return ONLY JSON matching:
 {"recipes":[{"title","cuisine","difficulty":"easy|medium|hard","totalMinutes":int,"servings":int,"matchScore":0-100,"whyItFits",
 "ingredients":[{"name","qty":number|null,"unit":"g|ml|tsp|tbsp|x|pinch|"}],"steps":[{"text","timerMinutes":int|null}],
 "allergens":[UK 14 allergen names: ${UK14.join(', ')}],"nutritionPerServing":{"kcal","proteinG","carbsG","fatG"},
@@ -47,10 +47,21 @@ for meat/fish/eggs; never suggest unsafe practices (raw flour, pink poultry, hon
 nutrition is an estimate. If kids mode, keep steps simple and mark adult-only steps with "(grown-up job)".`;
 
 const REF_RULE = `\n${escoffier.PRINCIPLES} Add "inspiredBy":"<Escoffier number>"|null to each recipe.`;
+const MODE_RULE = {
+  escoffier: `\nINSPIRATION MODE = ESCOFFIER (strictly classical): every recipe must be a faithful adaptation of the closest supplied Escoffier entry to the cook's ingredients and needs — keep his technique, sauce/fond logic and flavour structure; only modernise measures, timings and food safety. Set "inspiredBy" on every recipe. If fusion cuisines are requested, keep the classical base and bring the other cuisines through seasoning or garnish only.`,
+  blend: `\nINSPIRATION MODE = MALCOLM & ESCOFFIER: blend Escoffier's techniques and themes with your own modern creativity and contemporary flavour combinations; cite an entry via "inspiredBy" only when a recipe genuinely draws on it.`,
+  malcolm: `\nINSPIRATION MODE = MALCOLM AI CHEF ONLY: free modern creativity with no Escoffier grounding; set "inspiredBy" to null.`
+};
+const BRIEF_RULE = `\nThe "brief" field is the cook's own words. Honour every explicit constraint in brief.constraints: kcalMax = max kcal per serving, proteinMin = min protein g per serving, budgetGBP = total ingredient budget in pounds, spice = heat 0-10, avoid = never use, moods = flavours/textures/occasion to deliver, memory = an experience to evoke. Treat the rest of brief.raw as creative direction. If brief.question is true, answer the question directly in 1-2 sentences in "blessing", then give the recipes.`;
 function buildUserPrompt(q, refs) {
   return JSON.stringify({ ...(refs && refs.length ? { references: refs.map(r => ({ no: r.no, title: r.title, role: r.role, text: r.text })) } : {}),
     include: q.include, exclude: q.exclude, dish: q.dish || null, maxMinutes: q.maxMinutes, difficulty: q.difficulty || 'any',
-    servings: q.servings, diets: q.diets, cuisine: q.cuisine || 'any', kidsMode: !!q.kidsMode, count: q.limit || 4
+    servings: q.servings, diets: q.diets, cuisine: q.cuisine || 'any', kidsMode: !!q.kidsMode, count: q.limit || 4,
+    ...(q.cuisines && q.cuisines.length > 1 ? { cuisines: q.cuisines, fusion: `Create fusion dishes that genuinely blend ${q.cuisines.join(', ')} techniques and flavours. Set "cuisine" to "${q.cuisines.join('–')} fusion" and let the title reflect the fusion where natural.` } : {}),
+    ...(q.inspiration && (q.inspiration.topRated || []).length ? { communityFavourites: q.inspiration.topRated.map(t => `${t.title} (${t.cuisine || 'any'}, ${t.avg}★ from ${t.count})`), inspirationRule: 'Optional loose inspiration only: members rate these highly. Never copy them; the request above always wins.' } : {}),
+    ...(q.inspiration && (q.inspiration.likes || []).length ? { memberLikes: q.inspiration.likes } : {}),
+    inspirationMode: q.inspirationMode || 'blend',
+    ...(q.brief && q.brief.raw ? { brief: q.brief } : {})
   });
 }
 function extractJson(text) {
@@ -86,7 +97,8 @@ async function callProvider(c, messages, fetchImpl = fetch) {
 async function generate(q, { fetchImpl, retries = 2, references = [] } = {}) {
   const c = config();
   if (!aiEnabled()) return { source: 'offline', recipes: rank(q, { limit: q.limit || 4 }) };
-  const messages = [{ role: 'system', content: SYSTEM + (references.length ? REF_RULE : '') }, { role: 'user', content: buildUserPrompt(q, references) }];
+  const mode = MODE_RULE[q.inspirationMode] ? q.inspirationMode : 'blend';
+  const messages = [{ role: 'system', content: SYSTEM + (references.length && mode !== 'malcolm' ? REF_RULE : '') + MODE_RULE[mode] + (q.brief && q.brief.raw ? BRIEF_RULE : '') }, { role: 'user', content: buildUserPrompt(q, references) }];
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -95,9 +107,9 @@ async function generate(q, { fetchImpl, retries = 2, references = [] } = {}) {
       const recipes = parsed.recipes.filter(r => !isUnsafe(r)).map((r, i) => {
         enforceAllergens(r);
         const ingredients = r.ingredients.map(x => ({ ...x, display: x.qty == null ? x.name : (x.unit === 'x' ? `${x.qty} ${x.name}` : `${x.qty} ${x.unit} ${x.name}`) }));
-        const { inspiredBy, ...rest } = r; const esc = escoffier.cite(r, references);
+        const { inspiredBy, ...rest } = r; const esc = mode === 'malcolm' ? null : escoffier.cite(r, references);
         return {
-          ...rest, ...(esc ? { escoffier: esc } : {}), id: `ai-${Date.now()}-${i}`, ingredients, baseServings: r.servings,
+          ...rest, ...(esc ? { escoffier: esc } : {}), id: require('./community').aiId(r), ingredients, baseServings: r.servings,
           steps: r.steps.map((s, n) => ({ n: n + 1, ...s })),
           nutritionPerServing: { ...r.nutritionPerServing, isEstimate: true },
           diet: Object.fromEntries((q.diets || []).map(d => [d, true])),
@@ -113,4 +125,4 @@ async function generate(q, { fetchImpl, retries = 2, references = [] } = {}) {
   }
   return { source: 'offline', fallbackReason: String(lastErr && lastErr.message), recipes: rank(q, { limit: q.limit || 4 }) };
 }
-module.exports = { generate, aiEnabled, config, ResponseSchema, extractJson };
+module.exports = { generate, aiEnabled, config, ResponseSchema, extractJson, buildUserPrompt, MODE_RULE };

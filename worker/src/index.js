@@ -1,4 +1,4 @@
-// Lux Prime Kitchen AI Chef — Cloudflare Worker (Hono + D1 + Workers Assets). Mirrors src/server.js API.
+// AIchef.food — Cloudflare Worker (Hono + D1 + Workers Assets). Mirrors src/server.js API.
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { z } from 'zod';
@@ -13,26 +13,33 @@ import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSa
 import { stripeApi } from './stripe.js';
 import * as magW from './magazine.js';
 import * as members from './members.js';
+import community from '../../src/community.js';
+import CRmod from '../../src/community-routes.js';
+const CR = CRmod;
+import briefMod from '../../src/brief.js';
+import verifyMod from '../../src/verify.js';
+import mailer from '../../src/mailer.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
   include: z.array(tag).max(20).default([]), exclude: z.array(tag).max(20).default([]),
-  dish: z.string().trim().max(200).optional().default(''), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
+  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'), servings: z.coerce.number().int().min(1).max(12).default(2),
   diets: z.array(z.enum(DIETS)).max(6).default([]), excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
-  cuisine: z.string().trim().max(40).default('any'), kidsMode: z.boolean().default(false),
+  cuisine: z.string().trim().max(40).default('any'), cuisines: z.array(z.string().trim().min(1).max(40).regex(/^[\p{L} '\-&()]+$/u)).max(8).default([]), kidsMode: z.boolean().default(false),
   escoffier: z.string().regex(/^\d{1,4}[a-z]?$/).optional()
 }).refine(q => q.include.length || q.dish, { message: 'Add at least one ingredient or describe a dish' });
 const AuthSchema = z.object({ email: z.string().trim().toLowerCase().email().max(200), password: z.string().min(8).max(200), name: z.string().trim().max(80).optional() });
+const RegisterSchema = AuthSchema.extend({ confirmPassword: z.string().max(200).optional() }).refine(d => d.confirmPassword === undefined || d.confirmPassword === d.password, { message: 'Passwords don’t match', path: ['confirmPassword'] });
 const RecipeBlob = z.object({ id: z.string().max(120), title: z.string().max(140) }).passthrough();
 const SESSION_DAYS = 30;
 
 const app = new Hono();
 const appUrl = c => (c.env.APP_URL || new URL(c.req.url).origin).replace(/\/$/, '');
 const db = c => c.env.DB;
-const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), trial: u._trial ? { endsAt: new Date(+u.trial_ends_at).toISOString(), daysLeft: Math.max(1, Math.ceil((+u.trial_ends_at - Date.now()) / 864e5)) } : null, household: u._associateOf ? { role: 'member', owner: u._ownerName } : plansMod.canOwnSeats(u) ? { role: 'owner', seats: plansMod.seatCap() } : null, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, emailVerified: verifyMod.isVerified(u), plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), trial: u._trial ? { endsAt: new Date(+u.trial_ends_at).toISOString(), daysLeft: Math.max(1, Math.ceil((+u.trial_ends_at - Date.now()) / 864e5)) } : null, household: u._associateOf ? { role: 'member', owner: u._ownerName } : plansMod.canOwnSeats(u) ? { role: 'owner', seats: plansMod.seatCap() } : null, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
 const bad = (c, e) => c.json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' }, 400);
 
 // Expose string bindings to the shared Node modules (ai.js / plans.js read process.env).
@@ -127,11 +134,22 @@ const body = async c => { try { return await c.req.json(); } catch { return {}; 
 
 app.get('/api/csrf', c => c.json({ csrfToken: c.get('csrf') }));
 app.post('/api/auth/register', rl('auth', 20, 900), async c => {
-  const p = AuthSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
+  const p = RegisterSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
   if (await db(c).prepare('SELECT 1 FROM users WHERE email=?').bind(p.data.email).first()) return c.json({ error: 'An account with that email already exists' }, 409);
   const hash = await hashPassword(p.data.password);
   const u = await db(c).prepare('INSERT INTO users(email,password_hash,name,trial_ends_at) VALUES(?,?,?,?) RETURNING *').bind(p.data.email, hash, p.data.name || null, Date.now() + plansMod.TRIAL_DAYS * 864e5).first();
-  await startSession(c, u); return c.json({ user: publicUser(await members.effectiveUser(db(c), u)) }, 201);
+  await startSession(c, u); let verification = 'pending';
+  try { const r = await verifyMod.sendVerification(cq(c), c.env, u, appUrl(c)); if (r.sent) verification = 'sent'; } catch (e) { console.error('verify email', e && e.message); }
+  return c.json({ user: publicUser(await members.effectiveUser(db(c), u)), verification }, 201);
+});
+app.post('/api/auth/verify', rl('verify', 30, 3600), async c => {
+  const r = await verifyMod.consume(cq(c), String((await body(c)).token || '')); if (!r.ok) return c.json({ error: r.error, expired: !!r.expired }, 400);
+  const u = await db(c).prepare('SELECT * FROM users WHERE id=?').bind(r.userId).first(); return c.json({ ok: true, user: publicUser(u) });
+});
+app.post('/api/auth/verify/resend', rl('verify-resend', 5, 3600), needAuth, async c => {
+  const u = c.get('user'); if (verifyMod.isVerified(u)) return c.json({ ok: true, verified: true });
+  if (!mailer.ready(c.env)) return c.json({ ok: false, pending: true, reason: 'email-not-configured', error: 'Verification emails aren’t switched on yet — your account works fully meanwhile, and we’ll ask you to confirm once they are.' }, 503);
+  try { await verifyMod.sendVerification(cq(c), c.env, u, appUrl(c)); return c.json({ ok: true, sent: true }); } catch (e) { console.error('verify resend', e && e.message); return c.json({ error: 'Couldn’t send the email just now — please try again shortly' }, 502); }
 });
 app.post('/api/auth/login', rl('auth', 20, 900), async c => {
   const p = AuthSchema.safeParse(await body(c)); if (!p.success) return c.json({ error: 'Incorrect email or password' }, 401);
@@ -142,7 +160,7 @@ app.post('/api/auth/login', rl('auth', 20, 900), async c => {
 });
 app.post('/api/auth/logout', async c => { const sid = getCookie(c, 'lp_session'); if (sid) await db(c).prepare('DELETE FROM sessions WHERE id=?').bind(sid).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/me', c => c.json({ user: publicUser(c.get('user')) || null }));
-const PwSchema = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200) });
+const PwSchema = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200), confirmPassword: z.string().max(200).optional() }).refine(d => d.confirmPassword === undefined || d.confirmPassword === d.newPassword, { message: 'New passwords don’t match', path: ['confirmPassword'] });
 app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
   const p = PwSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
   const u = c.get('user'); if (!(await verifyPassword(p.data.currentPassword, u.password_hash))) return c.json({ error: 'Current password is incorrect' }, 401);
@@ -155,17 +173,20 @@ app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
 app.delete('/api/me', needAuth, async c => { if (isTester(c.get('user'))) return c.json({ error: 'The shared test account can’t be deleted from the site' }, 403); await db(c).prepare('DELETE FROM users WHERE id=?').bind(c.get('user').id).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/health', c => c.json({ ok: true, runtime: 'cloudflare-workers', ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!c.env.STRIPE_SECRET_KEY }));
 app.get('/api/plans', c => { const s = !!c.env.STRIPE_SECRET_KEY; const m = plansMod.magazine(); return c.json({ plans: Object.values(plans()).map(({ priceId, annualPriceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(s && priceId), availableAnnual: p.id === 'free' || !!(s && annualPriceId) })), magazine: { price: m.price, annualPrice: m.annualPrice, savePct: m.savePct } }); });
-app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set(RECIPES.map(r => r.cuisine))].sort()] }));
+app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...RECIPES.map(r => r.cuisine), ...community.FUSION_CUISINES])].sort()] }));
 
 app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   const p = SearchSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
   const u = c.get('user'), prem = isPremium(u), pl = plans();
   if (!prem && u.searches_used >= pl.free.searches) return c.json({ error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' }, 402);
-  const q = { ...p.data, difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
+  const cuisines = community.normCuisines(p.data.cuisines, p.data.cuisine);
+  const q = { ...p.data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
+  const brief = briefMod.without(briefMod.parseBrief(p.data.dish), p.data.briefIgnore); Object.assign(q, briefMod.applyHints(q, brief)); q.brief = { raw: brief.raw, constraints: Object.fromEntries(Object.entries(brief.hints).map(([k, v]) => [k, v.value])), question: brief.question };
+  try { q.inspiration = await community.inspiration(cq(c), u.id); } catch {}
   // Same-account workers.dev subrequests are blocked, so reach the Malcolm worker through its service binding.
   const mBase = String(c.env.MALCOLM_AI_URL || '').replace(/\/+$/, '');
   const fetchImpl = (url, opts) => (c.env.MALCOLM && mBase && String(url).startsWith(mBase)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
-  let references = []; try { references = await escoffier.references(d1all(c), q, { pinned: q.escoffier }); } catch (e) { console.error('escoffier', e && e.message); }
+  let references = []; try { references = await (q.inspirationMode === 'malcolm' && !q.escoffier ? [] : escoffier.references(d1all(c), q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e && e.message); }
   const out = await ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1), references });
   let recipes = out.recipes.map(r => ({ ...r, image: imagesMod.curatedImage(r), safetyNotes: safetyNotes(r, q) }));
   // AI dishes get an AI photo, generated lazily by GET /api/dish-image/:key (never blocks the recipe text).
@@ -182,7 +203,7 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
     db(c).prepare('UPDATE users SET searches_used = searches_used + ? WHERE id=?').bind(prem ? 0 : 1, u.id), // Commis Chef allowance only counts non-paid, non-trial searches
     db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify(p.data), recipes.map(r => r.title).join(' · '))]);
   const fresh = await members.effectiveUser(db(c), await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first());
-  return c.json({ source: out.source, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
+  return c.json({ source: out.source, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, inspirationMode: q.inspirationMode, understood: briefMod.summary(brief), question: brief.question, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
 });
 
 // Escoffier Classics (public domain, 1907) — browse/search + single entry.
@@ -190,13 +211,28 @@ const d1all = c => async (sql, params) => (await db(c).prepare(sql).bind(...para
 app.get('/api/escoffier', async c => { const r = c.json(await escoffier.list(d1all(c), c.req.query())); r.headers.set('Cache-Control', 'public, max-age=300'); return r; });
 app.get('/api/escoffier/:no', async c => { const r = await escoffier.one(d1all(c), c.req.param('no')); return r ? c.json(r) : c.json({ error: 'Not found' }, 404); });
 
-app.get('/api/favourites', needAuth, needPremium, async c => { const { results } = await db(c).prepare('SELECT recipe_json FROM favourites WHERE user_id=? ORDER BY id DESC').bind(c.get('user').id).all(); return c.json({ favourites: results.map(r => JSON.parse(r.recipe_json)) }); });
+// Community adapter (shared with src/server.js): ratings, top-rated, events, favourites, synced prefs.
+const cq = c => ({ all: async (sql, p) => (await db(c).prepare(sql).bind(...p).all()).results, get: async (sql, p) => (await db(c).prepare(sql).bind(...p).first()) || null, run: async (sql, p) => db(c).prepare(sql).bind(...p).run() });
+const cctx = async (c, withBody) => ({ q: cq(c), user: c.get('user') || null, params: c.req.param(), query: c.req.query(), body: withBody ? await body(c) : {}, library: RECIPES,
+  actor: c.get('user') ? 'u:' + c.get('user').id : 'ip:' + community.fnv(c.req.header('cf-connecting-ip') || 'anon'), escOne: no => escoffier.one(d1all(c), no) });
+const send = (c, r) => c.json(r.json, r.status);
+app.get('/api/favourites', needAuth, needPremium, async c => send(c, await CR.H.favList(await cctx(c))));
 app.post('/api/favourites', needAuth, needPremium, async c => {
   const b = await body(c); const p = RecipeBlob.safeParse(b && b.recipe); if (!p.success) return bad(c, p.error);
   const json = JSON.stringify(p.data); if (json.length > 60000) return c.json({ error: 'Recipe too large' }, 413);
-  await db(c).prepare('INSERT OR REPLACE INTO favourites(user_id,recipe_id,recipe_json) VALUES(?,?,?)').bind(c.get('user').id, p.data.id, json).run(); return c.json({ ok: true }, 201);
+  const x = await cctx(c); x.body = { recipe: p.data };
+  return send(c, await CR.H.favAdd(x, async r => db(c).prepare('INSERT INTO favourites(user_id,recipe_id,recipe_json) VALUES(?,?,?) ON CONFLICT(user_id,recipe_id) DO UPDATE SET recipe_json=excluded.recipe_json').bind(c.get('user').id, r.id, JSON.stringify(r)).run()));
 });
-app.delete('/api/favourites/:id', needAuth, needPremium, async c => { await db(c).prepare('DELETE FROM favourites WHERE user_id=? AND recipe_id=?').bind(c.get('user').id, c.req.param('id').slice(0, 120)).run(); return c.json({ ok: true }); });
+app.delete('/api/favourites/:id', needAuth, needPremium, async c => { await db(c).prepare('DELETE FROM favourites WHERE user_id=? AND recipe_id=?').bind(c.get('user').id, c.req.param('id').slice(0, 120)).run(); CR.bust(); return c.json({ ok: true }); });
+app.get('/api/recipes/stats', async c => send(c, await CR.H.stats(await cctx(c))));
+app.get('/api/recipes/top', async c => send(c, await CR.H.top(await cctx(c))));
+app.get('/api/recipes/:id', async c => send(c, await CR.H.one(await cctx(c))));
+app.put('/api/recipes/:id/rating', rl('rate', 30, 60), async c => send(c, await CR.H.rate(await cctx(c, true))));
+app.delete('/api/recipes/:id/rating', rl('rate', 30, 60), async c => send(c, await CR.H.unrate(await cctx(c))));
+app.post('/api/recipes/:id/event', rl('event', 60, 60), async c => send(c, await CR.H.event(await cctx(c, true))));
+app.post('/api/brief', async c => { const b = briefMod.parseBrief(String(((await body(c)) || {}).text || '')); return c.json({ understood: briefMod.summary(b), question: b.question }); });
+app.get('/api/prefs', async c => send(c, await CR.H.prefsGet(await cctx(c))));
+app.put('/api/prefs', async c => send(c, await CR.H.prefsPut(await cctx(c, true))));
 app.get('/api/history', needAuth, needPremium, async c => { const { results } = await db(c).prepare('SELECT id,query_json,titles,created_at FROM history WHERE user_id=? ORDER BY id DESC LIMIT 50').bind(c.get('user').id).all(); return c.json({ history: results.map(h => ({ id: h.id, titles: h.titles, created_at: h.created_at, query: JSON.parse(h.query_json) })) }); });
 
 app.post('/api/share', needAuth, async c => {
@@ -267,11 +303,11 @@ app.get('/r/:id', async c => {
   const id = c.req.param('id').slice(0, 20); const row = await db(c).prepare('SELECT recipe_json FROM shares WHERE id=?').bind(id).first();
   if (!row) return c.html(tpl.replace('<!--OG-->', '<meta name="robots" content="noindex">'), 404);
   const r = JSON.parse(row.recipe_json); const base = appUrl(c); const url = `${base}/r/${id}`;
-  const img = r.image && r.image.og ? base + r.image.og : `${base}/img/hero.jpg`;
-  const desc = `${r.cuisine || ''} · ${r.totalMinutes || '?'} min · ${r.difficulty || ''} — a Lux Prime Kitchen AI Chef recipe, powered by Malcolm AI.`;
-  const og = [['og:type','article'],['og:site_name','Lux Prime Kitchen'],['og:title',r.title],['og:description',desc],['og:url',url],['og:image',img]].map(([p, v]) => `<meta property="${p}" content="${escH(v)}">`).join('')
+  const img = r.image && r.image.og ? base + r.image.og : `${base}/img/brand/og.png`;
+  const desc = `${r.cuisine || ''} · ${r.totalMinutes || '?'} min · ${r.difficulty || ''} — an AIchef.food recipe by Malcolm, your AI chef.`;
+  const og = [['og:type','article'],['og:site_name','AIchef.food'],['og:title',r.title],['og:description',desc],['og:url',url],['og:image',img]].map(([p, v]) => `<meta property="${p}" content="${escH(v)}">`).join('')
     + [['twitter:card','summary_large_image'],['twitter:title',r.title],['twitter:description',desc],['twitter:image',img]].map(([n, v]) => `<meta name="${n}" content="${escH(v)}">`).join('') + `<link rel="canonical" href="${escH(url)}">`;
-  return c.html(tpl.replace('<!--OG-->', og).replace(/<title>[^<]*<\/title>/, `<title>${escH(r.title)} · Lux Prime Kitchen</title>`).replace('data-share-id=""', `data-share-id="${escH(id)}"`));
+  return c.html(tpl.replace('<!--OG-->', og).replace(/<title>[^<]*<\/title>/, `<title>${escH(r.title)} · AIchef.food</title>`).replace('data-share-id=""', `data-share-id="${escH(id)}"`));
 });
 
 // ---- Gastronomique household seats ----
@@ -279,23 +315,25 @@ const EmailOnly = z.object({ email: z.string().trim().toLowerCase().email().max(
 app.get('/api/members', needAuth, async c => { const u = c.get('user'); if (!plansMod.canOwnSeats(u)) return c.json({ owner: false, seats: plansMod.seatCap() }); return c.json({ owner: true, ...(await members.listMembers(db(c), u)) }); });
 app.post('/api/members/invite', rl('invite', 20, 3600), needAuth, async c => {
   const p = EmailOnly.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user');
+  if (!verifyMod.isVerified(u)) return c.json({ error: 'Please confirm your email address before inviting household members', verify: true }, 403);
   const r = await members.invite(db(c), u, p.data.email); if (r.error) return c.json({ error: r.error }, r.status);
   const link = `${appUrl(c)}/account.html?invite=${r.token}`; let emailed = false;
   if (magW.emailReady(c.env)) { try {
-    const who = u.name || u.email; const res = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${c.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: c.env.MAGAZINE_FROM, to: [p.data.email], subject: `${who} invited you to their Lux Prime Kitchen Gastronomique plan`,
-      text: `${who} has invited you to join their Lux Prime Kitchen Gastronomique household: unlimited AI chef recipes and your own personalised monthly magazine.\n\nAccept (sign in or create a free account with this email address): ${link}\n\nIf you weren't expecting this, just ignore this email.` }) }); emailed = res.ok; } catch (e) { console.error('invite email', e && e.message); } }
+    const who = u.name || u.email; const res = await mailer.send(c.env, { to: p.data.email, subject: `${who} invited you to their AIchef.food Gastronomique plan`,
+      text: `${who} has invited you to join their AIchef.food Gastronomique · Lux Prime household: unlimited AI chef recipes and your own personalised monthly magazine.\n\nAccept (sign in or create a free account with this email address): ${link}\n\nIf you weren't expecting this, just ignore this email.` }); emailed = !!res.sent; } catch (e) { console.error('invite email', e && e.message); } }
   return c.json({ ok: true, emailed, link });
 });
 app.delete('/api/members/me', needAuth, async c => { await members.leave(db(c), c.get('user')); return c.json({ ok: true }); });
 app.delete('/api/members/:id', needAuth, async c => { const r = await members.remove(db(c), c.get('user'), +c.req.param('id') || 0); return c.json({ ok: !!r.meta.changes }); });
 app.post('/api/members/accept', rl('accept', 20, 3600), needAuth, async c => {
   const t = String((await body(c)).token || ''); if (!/^[0-9a-f]{48}$/.test(t)) return c.json({ error: 'Invalid invite link' }, 400);
+  if (!verifyMod.isVerified(c.get('user'))) return c.json({ error: 'Please confirm your email address first, then accept the invite', verify: true }, 403);
   const raw = await db(c).prepare('SELECT * FROM users WHERE id=?').bind(c.get('user').id).first();
   const r = await members.accept(db(c), raw, t); if (r.error) return c.json({ error: r.error }, r.status);
   return c.json({ ok: true, user: publicUser(await members.effectiveUser(db(c), raw)) });
 });
 
-// ---- Lux Prime Kitchen Magazine ----
+// ---- AIchef.food Magazine ----
 const malcolmFetch = env => { const mBase = String(env.MALCOLM_AI_URL || '').replace(/\/+$/, ''); return (url, opts) => (env.MALCOLM && mBase && String(url).startsWith(mBase)) ? env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts); };
 const magTier = (u, row) => isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u._trial ? 'trial' : magW.entitled(u, row) ? 'subscriber' : isPremium(u) ? 'member' : 'free';
 async function previewsToday(c, uid) { return ((await db(c).prepare("SELECT COUNT(*) n FROM magazine_issues WHERE user_id=? AND kind='preview' AND created_at>=date('now')").bind(uid).first()) || {}).n || 0; }
@@ -308,6 +346,7 @@ app.get('/api/magazine', async c => {
 });
 app.post('/api/magazine/optin', needAuth, async c => {
   const u = c.get('user'); const on = !!(await body(c)).optIn; const row = await magW.magRow(c.env, u.id);
+  if (on && !verifyMod.isVerified(u)) return c.json({ error: 'Please confirm your email address first — we only send the magazine to verified emails', verify: true }, 403);
   if (on && !magW.entitled(u, row)) return c.json({ error: 'Add the magazine first to receive it by email', upgrade: '/pricing.html#magazine' }, 402);
   await db(c).prepare(`INSERT INTO magazine_subs(user_id,opt_in,${on ? 'opt_in_at' : 'opt_out_at'},unsub_token) VALUES(?,?,CURRENT_TIMESTAMP,?) ON CONFLICT(user_id) DO UPDATE SET opt_in=excluded.opt_in, ${on ? 'opt_in_at' : 'opt_out_at'}=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP`).bind(u.id, on ? 1 : 0, magW.newUnsubToken()).run();
   return c.json({ ok: true, optIn: on });
@@ -333,7 +372,7 @@ app.get('/m/issue/:token', async c => {
   const pdf = await c.env.IMAGES.get(`mag/${t}.pdf`, 'arrayBuffer'); if (!pdf) return c.text('This issue has expired', 404);
   return new Response(pdf, { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': 'inline; filename="Lux-Prime-Kitchen-Magazine.pdf"', 'Cache-Control': 'private, max-age=3600', 'X-Robots-Tag': 'noindex' } });
 });
-const unsubPage = (msg, form = '') => `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Magazine emails · Lux Prime Kitchen</title><link rel="stylesheet" href="/css/styles.css"></head><body><main class="wrap" style="max-width:560px;padding:64px 20px"><span class="eyebrow">Lux Prime Kitchen Magazine</span><h1 style="font-family:var(--serif)">Email preferences</h1><p>${msg}</p>${form}<p class="muted" style="font-size:.9rem">To cancel the magazine add-on itself, use <a href="/account.html#magazine">your account</a> (Manage billing).</p></main></body></html>`;
+const unsubPage = (msg, form = '') => `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Magazine emails · AIchef.food</title><link rel="stylesheet" href="/css/styles.css"></head><body><main class="wrap" style="max-width:560px;padding:64px 20px"><span class="eyebrow">AIchef.food Magazine</span><h1 style="font-family:var(--serif)">Email preferences</h1><p>${msg}</p>${form}<p class="muted" style="font-size:.9rem">To cancel the magazine add-on itself, use <a href="/account.html#magazine">your account</a> (Manage billing).</p></main></body></html>`;
 app.get('/m/unsubscribe', async c => {
   const t = String(c.req.query('t') || ''); if (!/^[0-9a-f]{48}$/.test(t)) return c.html(unsubPage('This link isn’t valid. You can manage emails from your account.'), 400);
   return c.html(unsubPage('Stop receiving the monthly magazine by email?', `<form method="post" action="/m/unsubscribe?t=${t}"><button class="btn">Unsubscribe</button></form>`));
