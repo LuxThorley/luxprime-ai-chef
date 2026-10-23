@@ -307,3 +307,20 @@ input[type=search]{width:100%;background:var(--bg2);color:var(--ink);border:1px 
 .res-meta>.muted{flex:0 0 auto;width:auto}
 @media (max-width:560px){.brief-prompts .chip{font-size:.8rem;min-height:34px}}
 .res-meta{flex-wrap:wrap;max-width:100%}.res-meta .uchip,.understood .uchip{white-space:normal;max-width:100%}
+
+/* ---- v3: sign-up confirm password + email verification ---- */
+.pw-pair{display:grid;grid-template-columns:1fr;gap:0 12px}
+form.reg .pw-pair{grid-template-columns:1fr 1fr;align-items:end}
+.pw-pair>div{min-width:0}
+.pw-field{position:relative}
+.pw-field input{width:100%;padding-right:4.2rem}
+.pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:none;color:var(--muted);font:600 .78rem/1 inherit;padding:.5rem .55rem;min-height:36px;border-radius:8px;cursor:pointer}
+.pw-eye:hover,.pw-eye:focus-visible{color:inherit;background:color-mix(in srgb,currentColor 10%,transparent)}
+.pw-match{min-height:1.2em;margin:.3rem 0 0;font-size:.82rem}
+.pw-match.ok{color:#4cbf73}.pw-match.bad{color:#e0786a}
+input[aria-invalid=true]{border-color:#e0786a}
+.verify-pending{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;border-left:4px solid var(--gold,#c9a14a);margin-bottom:18px}
+.verify-pending>div{flex:1 1 320px}
+.vp-out{flex-basis:100%;margin:0;font-size:.85rem;min-height:1em}
+.ok-note{border-left:4px solid #4cbf73}
+@media (max-width:560px){form.reg .pw-pair{grid-template-columns:1fr}}

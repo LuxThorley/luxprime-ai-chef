@@ -4,7 +4,7 @@ const path = require('path'); const crypto = require('crypto');
 const express = require('express'); const helmet = require('helmet'); const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser'); const bcrypt = require('bcryptjs'); const jwt = require('jsonwebtoken');
 const { z } = require('zod');
-const { open } = require('./db'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
+const { open } = require('./db'); const verifyMod = require('./verify'); const mailer = require('./mailer'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
 const { plans, isPremium, isAdmin, isTester } = require('./plans'); const images = require('./images');
 const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14, RECIPES } = require('./recipes'); const community = require('./community'); const CR = require('./community-routes'); const briefMod = require('./brief');
 
@@ -22,9 +22,11 @@ const SearchSchema = z.object({
   escoffier: z.string().regex(/^\d{1,4}[a-z]?$/).optional()
 }).refine(q => q.include.length || q.dish, { message: 'Add at least one ingredient or describe a dish' });
 const AuthSchema = z.object({ email: z.string().trim().toLowerCase().email().max(200), password: z.string().min(8).max(200), name: z.string().trim().max(80).optional() });
+const RegisterSchema = AuthSchema.extend({ confirmPassword: z.string().max(200).optional() }).refine(d => d.confirmPassword === undefined || d.confirmPassword === d.password, { message: 'Passwords don’t match', path: ['confirmPassword'] });
 
 const a = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-function createApp({ db = open(), stripe } = {}) {
+function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env } = {}) {
+  const opts = { fetchImpl };
   const SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? null : 'dev-only-secret');
   if (!SECRET || (process.env.NODE_ENV === 'production' && SECRET === 'change-me')) throw new Error('Set a strong JWT_SECRET');
   if (stripe === undefined) stripe = process.env.STRIPE_SECRET_KEY ? require('stripe')(process.env.STRIPE_SECRET_KEY) : null;
@@ -84,15 +86,26 @@ function createApp({ db = open(), stripe } = {}) {
   });
   const needAuth = (req, res, next) => req.user ? next() : res.status(401).json({ error: 'Please sign in' });
   const needPremium = (req, res, next) => isPremium(req.user) ? next() : res.status(402).json({ error: 'This is a premium feature — upgrade to unlock', upgrade: '/pricing.html' });
-  const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+  const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, emailVerified: verifyMod.isVerified(u), plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
   const bad = (res, e) => res.status(400).json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' });
 
   app.post('/api/auth/register', authLimiter, a(async (req, res) => {
-    const p = AuthSchema.safeParse(req.body); if (!p.success) return bad(res, p.error);
+    const p = RegisterSchema.safeParse(req.body); if (!p.success) return bad(res, p.error);
     if (db.prepare('SELECT 1 FROM users WHERE email=?').get(p.data.email)) return res.status(409).json({ error: 'An account with that email already exists' });
     const hash = await bcrypt.hash(p.data.password, 12);
     const info = db.prepare('INSERT INTO users(email,password_hash,name) VALUES(?,?,?)').run(p.data.email, hash, p.data.name || null);
-    const u = db.prepare('SELECT * FROM users WHERE id=?').get(info.lastInsertRowid); setSession(res, u); res.status(201).json({ user: publicUser(u) });
+    const u = db.prepare('SELECT * FROM users WHERE id=?').get(info.lastInsertRowid); setSession(res, u); let verification = 'pending';
+    try { const r = await verifyMod.sendVerification(cq, mailEnv, u, `${req.protocol}://${req.get('host')}`, opts.fetchImpl); if (r.sent) verification = 'sent'; } catch (e) { console.error('verify email', e && e.message); }
+    res.status(201).json({ user: publicUser(u), verification });
+  }));
+  app.post('/api/auth/verify', authLimiter, a(async (req, res) => {
+    const r = await verifyMod.consume(cq, String((req.body || {}).token || '')); if (!r.ok) return res.status(400).json({ error: r.error, expired: !!r.expired });
+    res.json({ ok: true, user: publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(r.userId)) });
+  }));
+  app.post('/api/auth/verify/resend', authLimiter, needAuth, a(async (req, res) => {
+    if (verifyMod.isVerified(req.user)) return res.json({ ok: true, verified: true });
+    if (!mailer.ready(mailEnv)) return res.status(503).json({ ok: false, pending: true, reason: 'email-not-configured', error: 'Verification emails aren’t switched on yet — your account works fully meanwhile, and we’ll ask you to confirm once they are.' });
+    try { await verifyMod.sendVerification(cq, mailEnv, req.user, `${req.protocol}://${req.get('host')}`, opts.fetchImpl); res.json({ ok: true, sent: true }); } catch (e) { console.error('verify resend', e && e.message); res.status(502).json({ error: 'Couldn’t send the email just now — please try again shortly' }); }
   }));
   app.post('/api/auth/login', authLimiter, a(async (req, res) => {
     const p = AuthSchema.safeParse(req.body); if (!p.success) return res.status(401).json({ error: 'Incorrect email or password' });
@@ -103,7 +116,7 @@ function createApp({ db = open(), stripe } = {}) {
   }));
   app.post('/api/auth/logout', (req, res) => { res.clearCookie('lp_session', { path: '/' }); res.json({ ok: true }); });
   app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null }));
-  const PwSchema = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200) });
+  const PwSchema = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200), confirmPassword: z.string().max(200).optional() }).refine(d => d.confirmPassword === undefined || d.confirmPassword === d.newPassword, { message: 'New passwords don’t match', path: ['confirmPassword'] });
   app.post('/api/auth/password', authLimiter, needAuth, a(async (req, res) => {
     const p = PwSchema.safeParse(req.body); if (!p.success) return bad(res, p.error);
     if (!(await bcrypt.compare(p.data.currentPassword, req.user.password_hash))) return res.status(401).json({ error: 'Current password is incorrect' });

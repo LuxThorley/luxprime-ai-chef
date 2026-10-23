@@ -180,3 +180,11 @@ so the same dish always gets the same id and a client can't attach a rating to t
 **Malcolm context (additive):** each search passes the current top 5 (title, cuisine, average, count) as optional inspiration and the member's 5 latest hearted titles; the request always wins.
 
 **Cuisine fusion:** the app sends `cuisines: [...]` (up to 8); with two or more, Malcolm is told to create genuine fusion dishes and label the cuisine “A–B fusion”.
+
+## Email (verification, magazine, household invites)
+All outbound site email goes through one helper, `src/mailer.js` (Resend HTTPS API, works in Node and Workers).
+- **From:** `"Malcolm · AIchef.food" <malcolm@aichef.food>` by default; override with `MAIL_FROM` (falls back to the legacy `MAGAZINE_FROM`). **Reply-To:** `malcolm@aichef.food` (`MAIL_REPLY_TO`).
+- **Inactive until the `RESEND_API_KEY` secret is set.** Until then sign-ups show "verification pending" and the site works normally.
+- **Before setting the key, verify the `aichef.food` domain in Resend** (Resend → Domains → add `aichef.food`) and add the DNS records it gives you at the DNS host: the SPF `TXT` (and the MX record on the `send` subdomain), the DKIM `TXT` (`resend._domainkey`), and a DMARC `TXT` at `_dmarc.aichef.food` (start with `v=DMARC1; p=none; rua=mailto:malcolm@aichef.food`). Resend rejects mail from unverified domains (HTTP 403).
+- **Email verification:** sign-up emails a single-use link (`/account.html?verify=…`, valid 24h). Only the SHA-256 of the token is stored (`email_tokens`, migration `0009`). Migration 0009 marks every existing account verified and sends nothing. Unverified members can use the site, but their ratings carry no weight in rankings, and they can't receive the magazine by email or send/accept household invites.
+- Tests strip `RESEND_API_KEY` from the environment (`test/helpers/no-mail.js`), so they never reach Resend.

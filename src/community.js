@@ -93,6 +93,7 @@ const parseTs = v => typeof v === 'number' ? v * 1000 : Date.parse(String(v || '
 function raterWeight(r, now) {
   const u = { email: r.email, plan: r.plan };
   if (isAdmin(u) || isTester(u)) return K.staffW;
+  if (!(r.verified === 1 || r.verified === true)) return 0; // unverified emails don't move rankings
   if (r.created_by != null && +r.created_by === +r.user_id) return K.selfW;
   const age = (now - parseTs(r.u_created)) / 864e5;
   return age < K.newAccountDays ? K.newW : 1;
@@ -119,7 +120,7 @@ function scoreRecipes(rows, now = Date.now()) {
 }
 async function topRated(q, { limit = 10, now = Date.now() } = {}) {
   const [rt, fv, ev] = await Promise.all([
-    q.all('SELECT r.recipe_id, r.stars, r.user_id, r.updated_at, u.email, u.plan, u.created_at u_created, rc.created_by FROM ratings r JOIN users u ON u.id=r.user_id LEFT JOIN recipes rc ON rc.id=r.recipe_id', []),
+    q.all('SELECT r.recipe_id, r.stars, r.user_id, r.updated_at, u.email, u.plan, u.created_at u_created, u.email_verified verified, rc.created_by FROM ratings r JOIN users u ON u.id=r.user_id LEFT JOIN recipes rc ON rc.id=r.recipe_id', []),
     q.all('SELECT recipe_id, COUNT(*) n, MAX(created_at) last FROM favourites GROUP BY recipe_id', []),
     q.all('SELECT recipe_id, kind, COUNT(*) n, MAX(created_at) last FROM recipe_events GROUP BY recipe_id, kind', [])]);
   const by = new Map(); const row = id => { if (!by.has(id)) by.set(id, { id, ratings: [], hearts: 0, cooks: 0, shares: 0, views: 0, lastActivity: 0 }); return by.get(id); };

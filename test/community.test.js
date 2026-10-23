@@ -6,7 +6,7 @@ const C = require('../src/community'); const { RECIPES } = require('../src/recip
 
 function agent(db) { return request.agent(createApp({ db, stripe: null })); }
 async function signup(ag, email) { const t = (await ag.get('/api/csrf')).body.csrfToken; const r = await ag.post('/api/auth/register').set('x-csrf-token', t).send({ email, password: 'supersecret1' }); assert.equal(r.status, 201); return t; }
-const age = (db, email, days) => db.prepare("UPDATE users SET created_at=datetime('now', ?) WHERE email=?").run(`-${days} days`, email);
+const age = (db, email, days) => db.prepare("UPDATE users SET created_at=datetime('now', ?), email_verified=1 WHERE email=?").run(`-${days} days`, email);
 const aiRecipe = { title: 'Saffron Miso Salmon', cuisine: 'French–Japanese fusion', ingredients: [{ name: 'salmon' }, { name: 'miso' }, { name: 'saffron' }], steps: [{ text: 'Cook' }], totalMinutes: 25, difficulty: 'easy', nutritionPerServing: { kcal: 1 } };
 
 test('stable AI ids: same content → same id, different content → different id', () => {
@@ -30,9 +30,10 @@ test('ranking: Bayesian prior, min raters, staff/self/new-account discounts, spi
   assert.equal(by.many4.avg, Math.round(s.find(r => r.id === 'many4').avg * 1000) / 1000);
   process.env.ADMIN_EMAILS = 'boss@x.co';
   assert.equal(C.raterWeight({ email: 'boss@x.co', u_created: '2020-01-01 00:00:00' }, now), C.K.staffW);
-  assert.equal(C.raterWeight({ email: 'a@x.co', user_id: 7, created_by: 7, u_created: '2020-01-01 00:00:00' }, now), C.K.selfW);
-  assert.equal(C.raterWeight({ email: 'a@x.co', user_id: 7, created_by: 8, u_created: new Date(now - 3600e3).toISOString() }, now), C.K.newW);
-  assert.equal(C.raterWeight({ email: 'a@x.co', user_id: 7, created_by: 8, u_created: '2020-01-01 00:00:00' }, now), 1);
+  assert.equal(C.raterWeight({ email: 'a@x.co', verified: 1, user_id: 7, created_by: 7, u_created: '2020-01-01 00:00:00' }, now), C.K.selfW);
+  assert.equal(C.raterWeight({ email: 'a@x.co', verified: 1, user_id: 7, created_by: 8, u_created: new Date(now - 3600e3).toISOString() }, now), C.K.newW);
+  assert.equal(C.raterWeight({ email: 'a@x.co', verified: 1, user_id: 7, created_by: 8, u_created: '2020-01-01 00:00:00' }, now), 1);
+  assert.equal(C.raterWeight({ email: 'a@x.co', verified: 0, user_id: 7, created_by: 8, u_created: '2020-01-01 00:00:00' }, now), 0, 'unverified ratings never count');
   delete process.env.ADMIN_EMAILS;
 });
 

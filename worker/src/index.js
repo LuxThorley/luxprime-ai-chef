@@ -17,6 +17,8 @@ import community from '../../src/community.js';
 import CRmod from '../../src/community-routes.js';
 const CR = CRmod;
 import briefMod from '../../src/brief.js';
+import verifyMod from '../../src/verify.js';
+import mailer from '../../src/mailer.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
@@ -30,13 +32,14 @@ const SearchSchema = z.object({
   escoffier: z.string().regex(/^\d{1,4}[a-z]?$/).optional()
 }).refine(q => q.include.length || q.dish, { message: 'Add at least one ingredient or describe a dish' });
 const AuthSchema = z.object({ email: z.string().trim().toLowerCase().email().max(200), password: z.string().min(8).max(200), name: z.string().trim().max(80).optional() });
+const RegisterSchema = AuthSchema.extend({ confirmPassword: z.string().max(200).optional() }).refine(d => d.confirmPassword === undefined || d.confirmPassword === d.password, { message: 'Passwords don’t match', path: ['confirmPassword'] });
 const RecipeBlob = z.object({ id: z.string().max(120), title: z.string().max(140) }).passthrough();
 const SESSION_DAYS = 30;
 
 const app = new Hono();
 const appUrl = c => (c.env.APP_URL || new URL(c.req.url).origin).replace(/\/$/, '');
 const db = c => c.env.DB;
-const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), trial: u._trial ? { endsAt: new Date(+u.trial_ends_at).toISOString(), daysLeft: Math.max(1, Math.ceil((+u.trial_ends_at - Date.now()) / 864e5)) } : null, household: u._associateOf ? { role: 'member', owner: u._ownerName } : plansMod.canOwnSeats(u) ? { role: 'owner', seats: plansMod.seatCap() } : null, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, emailVerified: verifyMod.isVerified(u), plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), trial: u._trial ? { endsAt: new Date(+u.trial_ends_at).toISOString(), daysLeft: Math.max(1, Math.ceil((+u.trial_ends_at - Date.now()) / 864e5)) } : null, household: u._associateOf ? { role: 'member', owner: u._ownerName } : plansMod.canOwnSeats(u) ? { role: 'owner', seats: plansMod.seatCap() } : null, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
 const bad = (c, e) => c.json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' }, 400);
 
 // Expose string bindings to the shared Node modules (ai.js / plans.js read process.env).
@@ -131,11 +134,22 @@ const body = async c => { try { return await c.req.json(); } catch { return {}; 
 
 app.get('/api/csrf', c => c.json({ csrfToken: c.get('csrf') }));
 app.post('/api/auth/register', rl('auth', 20, 900), async c => {
-  const p = AuthSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
+  const p = RegisterSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
   if (await db(c).prepare('SELECT 1 FROM users WHERE email=?').bind(p.data.email).first()) return c.json({ error: 'An account with that email already exists' }, 409);
   const hash = await hashPassword(p.data.password);
   const u = await db(c).prepare('INSERT INTO users(email,password_hash,name,trial_ends_at) VALUES(?,?,?,?) RETURNING *').bind(p.data.email, hash, p.data.name || null, Date.now() + plansMod.TRIAL_DAYS * 864e5).first();
-  await startSession(c, u); return c.json({ user: publicUser(await members.effectiveUser(db(c), u)) }, 201);
+  await startSession(c, u); let verification = 'pending';
+  try { const r = await verifyMod.sendVerification(cq(c), c.env, u, appUrl(c)); if (r.sent) verification = 'sent'; } catch (e) { console.error('verify email', e && e.message); }
+  return c.json({ user: publicUser(await members.effectiveUser(db(c), u)), verification }, 201);
+});
+app.post('/api/auth/verify', rl('verify', 30, 3600), async c => {
+  const r = await verifyMod.consume(cq(c), String((await body(c)).token || '')); if (!r.ok) return c.json({ error: r.error, expired: !!r.expired }, 400);
+  const u = await db(c).prepare('SELECT * FROM users WHERE id=?').bind(r.userId).first(); return c.json({ ok: true, user: publicUser(u) });
+});
+app.post('/api/auth/verify/resend', rl('verify-resend', 5, 3600), needAuth, async c => {
+  const u = c.get('user'); if (verifyMod.isVerified(u)) return c.json({ ok: true, verified: true });
+  if (!mailer.ready(c.env)) return c.json({ ok: false, pending: true, reason: 'email-not-configured', error: 'Verification emails aren’t switched on yet — your account works fully meanwhile, and we’ll ask you to confirm once they are.' }, 503);
+  try { await verifyMod.sendVerification(cq(c), c.env, u, appUrl(c)); return c.json({ ok: true, sent: true }); } catch (e) { console.error('verify resend', e && e.message); return c.json({ error: 'Couldn’t send the email just now — please try again shortly' }, 502); }
 });
 app.post('/api/auth/login', rl('auth', 20, 900), async c => {
   const p = AuthSchema.safeParse(await body(c)); if (!p.success) return c.json({ error: 'Incorrect email or password' }, 401);
@@ -146,7 +160,7 @@ app.post('/api/auth/login', rl('auth', 20, 900), async c => {
 });
 app.post('/api/auth/logout', async c => { const sid = getCookie(c, 'lp_session'); if (sid) await db(c).prepare('DELETE FROM sessions WHERE id=?').bind(sid).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/me', c => c.json({ user: publicUser(c.get('user')) || null }));
-const PwSchema = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200) });
+const PwSchema = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200), confirmPassword: z.string().max(200).optional() }).refine(d => d.confirmPassword === undefined || d.confirmPassword === d.newPassword, { message: 'New passwords don’t match', path: ['confirmPassword'] });
 app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
   const p = PwSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
   const u = c.get('user'); if (!(await verifyPassword(p.data.currentPassword, u.password_hash))) return c.json({ error: 'Current password is incorrect' }, 401);
@@ -301,17 +315,19 @@ const EmailOnly = z.object({ email: z.string().trim().toLowerCase().email().max(
 app.get('/api/members', needAuth, async c => { const u = c.get('user'); if (!plansMod.canOwnSeats(u)) return c.json({ owner: false, seats: plansMod.seatCap() }); return c.json({ owner: true, ...(await members.listMembers(db(c), u)) }); });
 app.post('/api/members/invite', rl('invite', 20, 3600), needAuth, async c => {
   const p = EmailOnly.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user');
+  if (!verifyMod.isVerified(u)) return c.json({ error: 'Please confirm your email address before inviting household members', verify: true }, 403);
   const r = await members.invite(db(c), u, p.data.email); if (r.error) return c.json({ error: r.error }, r.status);
   const link = `${appUrl(c)}/account.html?invite=${r.token}`; let emailed = false;
   if (magW.emailReady(c.env)) { try {
-    const who = u.name || u.email; const res = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${c.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: c.env.MAGAZINE_FROM, to: [p.data.email], subject: `${who} invited you to their AIchef.food Gastronomique plan`,
-      text: `${who} has invited you to join their AIchef.food Gastronomique · Lux Prime household: unlimited AI chef recipes and your own personalised monthly magazine.\n\nAccept (sign in or create a free account with this email address): ${link}\n\nIf you weren't expecting this, just ignore this email.` }) }); emailed = res.ok; } catch (e) { console.error('invite email', e && e.message); } }
+    const who = u.name || u.email; const res = await mailer.send(c.env, { to: p.data.email, subject: `${who} invited you to their AIchef.food Gastronomique plan`,
+      text: `${who} has invited you to join their AIchef.food Gastronomique · Lux Prime household: unlimited AI chef recipes and your own personalised monthly magazine.\n\nAccept (sign in or create a free account with this email address): ${link}\n\nIf you weren't expecting this, just ignore this email.` }); emailed = !!res.sent; } catch (e) { console.error('invite email', e && e.message); } }
   return c.json({ ok: true, emailed, link });
 });
 app.delete('/api/members/me', needAuth, async c => { await members.leave(db(c), c.get('user')); return c.json({ ok: true }); });
 app.delete('/api/members/:id', needAuth, async c => { const r = await members.remove(db(c), c.get('user'), +c.req.param('id') || 0); return c.json({ ok: !!r.meta.changes }); });
 app.post('/api/members/accept', rl('accept', 20, 3600), needAuth, async c => {
   const t = String((await body(c)).token || ''); if (!/^[0-9a-f]{48}$/.test(t)) return c.json({ error: 'Invalid invite link' }, 400);
+  if (!verifyMod.isVerified(c.get('user'))) return c.json({ error: 'Please confirm your email address first, then accept the invite', verify: true }, 403);
   const raw = await db(c).prepare('SELECT * FROM users WHERE id=?').bind(c.get('user').id).first();
   const r = await members.accept(db(c), raw, t); if (r.error) return c.json({ error: r.error }, r.status);
   return c.json({ ok: true, user: publicUser(await members.effectiveUser(db(c), raw)) });
@@ -330,6 +346,7 @@ app.get('/api/magazine', async c => {
 });
 app.post('/api/magazine/optin', needAuth, async c => {
   const u = c.get('user'); const on = !!(await body(c)).optIn; const row = await magW.magRow(c.env, u.id);
+  if (on && !verifyMod.isVerified(u)) return c.json({ error: 'Please confirm your email address first — we only send the magazine to verified emails', verify: true }, 403);
   if (on && !magW.entitled(u, row)) return c.json({ error: 'Add the magazine first to receive it by email', upgrade: '/pricing.html#magazine' }, 402);
   await db(c).prepare(`INSERT INTO magazine_subs(user_id,opt_in,${on ? 'opt_in_at' : 'opt_out_at'},unsub_token) VALUES(?,?,CURRENT_TIMESTAMP,?) ON CONFLICT(user_id) DO UPDATE SET opt_in=excluded.opt_in, ${on ? 'opt_in_at' : 'opt_out_at'}=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP`).bind(u.id, on ? 1 : 0, magW.newUnsubToken()).run();
   return c.json({ ok: true, optIn: on });

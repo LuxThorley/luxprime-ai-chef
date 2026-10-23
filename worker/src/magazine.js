@@ -6,6 +6,8 @@ import dishimage from '../../src/dishimage.js';
 import imagesMod from '../../src/images.js';
 import plansMod from '../../src/plans.js';
 import { randomId } from './crypto.js';
+import mailer from '../../src/mailer.js';
+import verifyMod from '../../src/verify.js';
 import { effectiveUser } from './members.js';
 
 const { isAdmin, isTester } = plansMod;
@@ -59,8 +61,8 @@ export async function buildIssue(env, user, { fetchImpl, issueNo = 1, manageUrl,
 // Store an issue in KV behind an unguessable token (download link in the email; 400-day expiry).
 export async function storeIssue(env, pdf) { const token = randomId(24); await env.IMAGES.put(`mag/${token}.pdf`, pdf, { expirationTtl: 400 * 86400 }); return token; }
 
-// Email via Resend (only provider that can mail arbitrary addresses from Workers here). Inactive until RESEND_API_KEY + MAGAZINE_FROM exist.
-export const emailReady = env => !!(env.RESEND_API_KEY && env.MAGAZINE_FROM);
+// All mail goes through src/mailer.js (Resend; From "Malcolm · AIchef.food" <malcolm@aichef.food> unless MAIL_FROM/MAGAZINE_FROM). Inactive until RESEND_API_KEY exists.
+export const emailReady = env => mailer.ready(env);
 export async function sendIssueEmail(env, { to, name, month, year, titles, downloadUrl, unsubUrl, manageUrl, pdf }) {
   if (!emailReady(env)) return { sent: false, reason: 'email-not-configured' };
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -74,13 +76,10 @@ export async function sendIssueEmail(env, { to, name, month, year, titles, downl
 <p style="margin:26px 0"><a href="${esc(downloadUrl)}" style="background:#f29a1f;color:#2a1104;text-decoration:none;padding:13px 22px;border-radius:999px;font:600 14px Arial,sans-serif;letter-spacing:1px">DOWNLOAD YOUR MAGAZINE (PDF)</a></p>
 <p style="font:12px/1.6 Arial,sans-serif;color:#7a7065">You’re receiving this because you opted in to AIchef.food Magazine. <a href="${esc(unsubUrl)}" style="color:#7a7065">Unsubscribe from these emails</a> · <a href="${esc(manageUrl)}" style="color:#7a7065">Manage or cancel your add-on</a>.</p>
 </div></div>`;
-  const body = { from: env.MAGAZINE_FROM, to: [to], subject: `Your AIchef.food Magazine — ${month} ${year}`, html,
+  const attachments = pdf && pdf.length < 8e6 && typeof pdf.toBase64 === 'function' ? [{ filename: `Lux-Prime-Kitchen-Magazine-${month}-${year}.pdf`, content: pdf.toBase64() }] : undefined;
+  return mailer.send(env, { to, subject: `Your AIchef.food Magazine — ${month} ${year}`, html,
     text: `Dear ${name},\n\nYour ${month} issue of AIchef.food Magazine is ready: ${titles.join('; ')}.\nDownload: ${downloadUrl}\n\nUnsubscribe: ${unsubUrl}\nManage or cancel: ${manageUrl}\n`,
-    headers: { 'List-Unsubscribe': `<${unsubUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } };
-  if (pdf && pdf.length < 8e6 && typeof pdf.toBase64 === 'function') body.attachments = [{ filename: `Lux-Prime-Kitchen-Magazine-${month}-${year}.pdf`, content: pdf.toBase64() }];
-  const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(`Resend ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  return { sent: true, id: (await r.json()).id };
+    headers: { 'List-Unsubscribe': `<${unsubUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' }, attachments });
 }
 
 const londonParts = d => Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(d).map(p => [p.type, p.value]));
@@ -90,7 +89,7 @@ export const issueMonth = (d = new Date()) => { const p = londonParts(d); return
 export async function tick(env, { fetchImpl, base, batch = 1 }) {
   const now = new Date(); const lp = londonParts(now); const month = issueMonth(now); const log = { month, enqueued: 0, processed: [] };
   if (+lp.day === 1 && +lp.hour >= 8) {
-    const { results } = await env.DB.prepare("SELECT u.* FROM users u JOIN magazine_subs m ON m.user_id=u.id WHERE m.opt_in=1").all();
+    const { results } = await env.DB.prepare("SELECT u.* FROM users u JOIN magazine_subs m ON m.user_id=u.id WHERE m.opt_in=1 AND u.email_verified=1").all();
     for (const u0 of results) { const u = await effectiveUser(env.DB, u0); const row = await magRow(env, u.id); if (u._trial || !entitled(u, row)) continue;
       const r = await env.DB.prepare("INSERT OR IGNORE INTO magazine_issues(user_id,month,kind,status) VALUES(?,?,'monthly','pending')").bind(u.id, month).run(); log.enqueued += r.meta.changes || 0; }
   }
@@ -102,7 +101,7 @@ export async function tick(env, { fetchImpl, base, batch = 1 }) {
       let u = await effectiveUser(env.DB, await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(it.user_id).first()); const row = await magRow(env, it.user_id); const sample = it.kind === 'sample';
       // 'sample' rows are created by an operator in D1 only: build + store, never email. The shared tester appears as "Alex".
       if (sample && u && isTester(u)) u = { ...u, name: 'Alex' };
-      if (!u || (!sample && (!row || !row.opt_in || u._trial || !entitled(u, row)))) { /* trial = on-demand preview only, no emailed issues */ await env.DB.prepare("UPDATE magazine_issues SET status='skipped' WHERE id=?").bind(it.id).run(); continue; }
+      if (!u || (!sample && (!row || !row.opt_in || !verifyMod.isVerified(u) || u._trial || !entitled(u, row)))) { /* trial = on-demand preview only, no emailed issues */ await env.DB.prepare("UPDATE magazine_issues SET status='skipped' WHERE id=?").bind(it.id).run(); continue; }
       const n = ((await env.DB.prepare("SELECT COUNT(*) n FROM magazine_issues WHERE user_id=? AND kind='monthly' AND status='sent'").bind(u.id).first()) || {}).n || 0;
       const manageUrl = `${base}/account.html#magazine`;
       const iss = await buildIssue(env, u, { fetchImpl, issueNo: n + 1, manageUrl, allowLibrary: it.attempts >= 2 });
