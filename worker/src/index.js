@@ -13,6 +13,9 @@ import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSa
 import { stripeApi } from './stripe.js';
 import * as magW from './magazine.js';
 import * as members from './members.js';
+import community from '../../src/community.js';
+import CRmod from '../../src/community-routes.js';
+const CR = CRmod;
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
@@ -22,7 +25,7 @@ const SearchSchema = z.object({
   dish: z.string().trim().max(200).optional().default(''), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'), servings: z.coerce.number().int().min(1).max(12).default(2),
   diets: z.array(z.enum(DIETS)).max(6).default([]), excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
-  cuisine: z.string().trim().max(40).default('any'), kidsMode: z.boolean().default(false),
+  cuisine: z.string().trim().max(40).default('any'), cuisines: z.array(z.string().trim().min(1).max(40).regex(/^[\p{L} '\-&()]+$/u)).max(8).default([]), kidsMode: z.boolean().default(false),
   escoffier: z.string().regex(/^\d{1,4}[a-z]?$/).optional()
 }).refine(q => q.include.length || q.dish, { message: 'Add at least one ingredient or describe a dish' });
 const AuthSchema = z.object({ email: z.string().trim().toLowerCase().email().max(200), password: z.string().min(8).max(200), name: z.string().trim().max(80).optional() });
@@ -155,13 +158,15 @@ app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
 app.delete('/api/me', needAuth, async c => { if (isTester(c.get('user'))) return c.json({ error: 'The shared test account can’t be deleted from the site' }, 403); await db(c).prepare('DELETE FROM users WHERE id=?').bind(c.get('user').id).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/health', c => c.json({ ok: true, runtime: 'cloudflare-workers', ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!c.env.STRIPE_SECRET_KEY }));
 app.get('/api/plans', c => { const s = !!c.env.STRIPE_SECRET_KEY; const m = plansMod.magazine(); return c.json({ plans: Object.values(plans()).map(({ priceId, annualPriceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(s && priceId), availableAnnual: p.id === 'free' || !!(s && annualPriceId) })), magazine: { price: m.price, annualPrice: m.annualPrice, savePct: m.savePct } }); });
-app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set(RECIPES.map(r => r.cuisine))].sort()] }));
+app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...RECIPES.map(r => r.cuisine), ...community.FUSION_CUISINES])].sort()] }));
 
 app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   const p = SearchSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
   const u = c.get('user'), prem = isPremium(u), pl = plans();
   if (!prem && u.searches_used >= pl.free.searches) return c.json({ error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' }, 402);
-  const q = { ...p.data, difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
+  const cuisines = community.normCuisines(p.data.cuisines, p.data.cuisine);
+  const q = { ...p.data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
+  try { q.inspiration = await community.inspiration(cq(c), u.id); } catch {}
   // Same-account workers.dev subrequests are blocked, so reach the Malcolm worker through its service binding.
   const mBase = String(c.env.MALCOLM_AI_URL || '').replace(/\/+$/, '');
   const fetchImpl = (url, opts) => (c.env.MALCOLM && mBase && String(url).startsWith(mBase)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
@@ -190,13 +195,27 @@ const d1all = c => async (sql, params) => (await db(c).prepare(sql).bind(...para
 app.get('/api/escoffier', async c => { const r = c.json(await escoffier.list(d1all(c), c.req.query())); r.headers.set('Cache-Control', 'public, max-age=300'); return r; });
 app.get('/api/escoffier/:no', async c => { const r = await escoffier.one(d1all(c), c.req.param('no')); return r ? c.json(r) : c.json({ error: 'Not found' }, 404); });
 
-app.get('/api/favourites', needAuth, needPremium, async c => { const { results } = await db(c).prepare('SELECT recipe_json FROM favourites WHERE user_id=? ORDER BY id DESC').bind(c.get('user').id).all(); return c.json({ favourites: results.map(r => JSON.parse(r.recipe_json)) }); });
+// Community adapter (shared with src/server.js): ratings, top-rated, events, favourites, synced prefs.
+const cq = c => ({ all: async (sql, p) => (await db(c).prepare(sql).bind(...p).all()).results, get: async (sql, p) => (await db(c).prepare(sql).bind(...p).first()) || null, run: async (sql, p) => db(c).prepare(sql).bind(...p).run() });
+const cctx = async (c, withBody) => ({ q: cq(c), user: c.get('user') || null, params: c.req.param(), query: c.req.query(), body: withBody ? await body(c) : {}, library: RECIPES,
+  actor: c.get('user') ? 'u:' + c.get('user').id : 'ip:' + community.fnv(c.req.header('cf-connecting-ip') || 'anon'), escOne: no => escoffier.one(d1all(c), no) });
+const send = (c, r) => c.json(r.json, r.status);
+app.get('/api/favourites', needAuth, needPremium, async c => send(c, await CR.H.favList(await cctx(c))));
 app.post('/api/favourites', needAuth, needPremium, async c => {
   const b = await body(c); const p = RecipeBlob.safeParse(b && b.recipe); if (!p.success) return bad(c, p.error);
   const json = JSON.stringify(p.data); if (json.length > 60000) return c.json({ error: 'Recipe too large' }, 413);
-  await db(c).prepare('INSERT OR REPLACE INTO favourites(user_id,recipe_id,recipe_json) VALUES(?,?,?)').bind(c.get('user').id, p.data.id, json).run(); return c.json({ ok: true }, 201);
+  const x = await cctx(c); x.body = { recipe: p.data };
+  return send(c, await CR.H.favAdd(x, async r => db(c).prepare('INSERT INTO favourites(user_id,recipe_id,recipe_json) VALUES(?,?,?) ON CONFLICT(user_id,recipe_id) DO UPDATE SET recipe_json=excluded.recipe_json').bind(c.get('user').id, r.id, JSON.stringify(r)).run()));
 });
-app.delete('/api/favourites/:id', needAuth, needPremium, async c => { await db(c).prepare('DELETE FROM favourites WHERE user_id=? AND recipe_id=?').bind(c.get('user').id, c.req.param('id').slice(0, 120)).run(); return c.json({ ok: true }); });
+app.delete('/api/favourites/:id', needAuth, needPremium, async c => { await db(c).prepare('DELETE FROM favourites WHERE user_id=? AND recipe_id=?').bind(c.get('user').id, c.req.param('id').slice(0, 120)).run(); CR.bust(); return c.json({ ok: true }); });
+app.get('/api/recipes/stats', async c => send(c, await CR.H.stats(await cctx(c))));
+app.get('/api/recipes/top', async c => send(c, await CR.H.top(await cctx(c))));
+app.get('/api/recipes/:id', async c => send(c, await CR.H.one(await cctx(c))));
+app.put('/api/recipes/:id/rating', rl('rate', 30, 60), async c => send(c, await CR.H.rate(await cctx(c, true))));
+app.delete('/api/recipes/:id/rating', rl('rate', 30, 60), async c => send(c, await CR.H.unrate(await cctx(c))));
+app.post('/api/recipes/:id/event', rl('event', 60, 60), async c => send(c, await CR.H.event(await cctx(c, true))));
+app.get('/api/prefs', async c => send(c, await CR.H.prefsGet(await cctx(c))));
+app.put('/api/prefs', async c => send(c, await CR.H.prefsPut(await cctx(c, true))));
 app.get('/api/history', needAuth, needPremium, async c => { const { results } = await db(c).prepare('SELECT id,query_json,titles,created_at FROM history WHERE user_id=? ORDER BY id DESC LIMIT 50').bind(c.get('user').id).all(); return c.json({ history: results.map(h => ({ id: h.id, titles: h.titles, created_at: h.created_at, query: JSON.parse(h.query_json) })) }); });
 
 app.post('/api/share', needAuth, async c => {

@@ -15,6 +15,7 @@ function open(file = process.env.DB_PATH || path.join(__dirname, '..', 'data', '
     query_json TEXT NOT NULL, titles TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
   CREATE TABLE IF NOT EXISTS shares (id TEXT PRIMARY KEY, recipe_json TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
   CREATE TABLE IF NOT EXISTS stripe_events (id TEXT PRIMARY KEY, created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
+  require('./community').SCHEMA_SQL.forEach(sql => db.exec(sql));
   loadEscoffier(db);
   return db;
 }

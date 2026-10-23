@@ -154,3 +154,29 @@ Set `NODE_ENV=production` (secure cookies) and `APP_URL` to the HTTPS domain.
 * Trade mark clearance for "Lux Prime" (a similar mark, LUXXPRIME, exists).
 * Allergen and nutrition data are guidance/estimates; keep the disclaimers.
 * Images in `public/img` are AI-generated; replace with commissioned photography if you need strong IP protection.
+
+## Ratings, favourites and the "Chef of Kings" ranking
+
+**Data (D1 migration `0008_community.sql`, additive):** `recipes` (stable id → full recipe JSON + image key, first writer wins),
+`ratings` (one row per member per recipe, 1–5, editable), `recipe_events` (view / cook / share / pdf, deduped per actor·recipe·kind·UTC day),
+`user_prefs` (synced diet, servings, cuisines, difficulty, time, kids mode, recent searches). Existing `favourites` rows are kept and back-filled into `recipes`.
+
+**Stable IDs:** library recipes keep their slug; AI recipes are `ai-` + a 64-bit FNV-1a hash of the normalised title and sorted ingredient names,
+so the same dish always gets the same id and a client can't attach a rating to tampered content (the server recomputes the hash); Escoffier entries are `esc-<no>`, built server-side.
+
+**Displayed rating:** plain arithmetic mean of all stars, shown to 3 decimal places, plus the count.
+
+**Ranking score** (`src/community.js → scoreRecipes`, constants in `K`):
+
+* Each rating has a trust weight *w*: 1 normally; 0.25 for admin/tester accounts; 0.5 for the member who first saved the recipe; 0.3 for accounts younger than 3 days.
+  If a recipe receives ≥ 5 ratings from new accounts within 24 h, those ratings get *w* = 0 (spike filter). One rating per account (primary key); max 40 rating changes per member per hour, plus per-IP rate limits.
+* **Bayesian average** `B = (C·m + Σ w·r) / (C + Σ w)` with prior weight `C = 5` and `m` = global weighted mean (3.5 if no data).
+* **Consistency** `1 − 0.04·σ` where σ is the weighted standard deviation of the stars.
+* **Engagement** `E = 0.20·ln(1+distinct raters) + 0.15·ln(1+hearts) + 0.25·ln(1+“I made this”) + 0.10·ln(1+shares+PDFs) + 0.05·ln(1+views)`.
+* **Recency** `ρ = 0.5^(days since last activity / 60)`.
+* **Score** `= B·(1 − 0.04σ) + E·(0.4 + 0.6ρ)`; ties broken by rating count. A recipe needs ratings from ≥ 2 distinct trusted members to be ranked.
+  The top 10 is cached for 60 s per isolate and shown on the homepage; ranked recipes get a “Featured #n” badge everywhere.
+
+**Malcolm context (additive):** each search passes the current top 5 (title, cuisine, average, count) as optional inspiration and the member's 5 latest hearted titles; the request always wins.
+
+**Cuisine fusion:** the app sends `cuisines: [...]` (up to 8); with two or more, Malcolm is told to create genuine fusion dishes and label the cuisine “A–B fusion”.

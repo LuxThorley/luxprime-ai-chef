@@ -42,7 +42,7 @@ function buildProfile({ history = [], favourites = [], user = {} }, now = new Da
     name: user.name || cap(String(user.email || 'Chef').split('@')[0].replace(/[^a-z]/gi, ' ').trim().split(' ')[0]) || 'Chef',
     searches: qs.length, favourites: favs.length, favTitles: favs.map(r => r.title).filter(Boolean).slice(0, 3), top: top.slice(0, 12), diets, excludeAllergens, exclude,
     difficulty: mode(qs.map(q => q.difficulty).filter(d => d && d !== 'any')) || 'medium', maxMinutes: mins.length ? Math.max(30, mins[Math.floor(mins.length / 2)]) : 60,
-    cuisine: mode(qs.map(q => q.cuisine).filter(c => c && c !== 'any')) || 'any', servings: +mode(qs.map(q => q.servings)) || 2, kidsMode: qs.length > 0 && qs.filter(q => q.kidsMode).length > qs.length / 2,
+    cuisine: mode(qs.map(q => (q.cuisines && q.cuisines.length ? q.cuisines.join(' + ') : q.cuisine)).filter(c => c && c !== 'any')) || 'any', servings: +mode(qs.map(q => q.servings)) || 2, kidsMode: qs.length > 0 && qs.filter(q => q.kidsMode).length > qs.length / 2,
     month: MONTHS[m], monthIndex: m, year: now.getUTCFullYear(), season: SEASON[m], seasonLine: SEASON_LINE[m], synthetic
   };
 }
@@ -52,7 +52,7 @@ function buildQuery(p) {
   const tops = p.top.map(t => t.name); const k = p.monthIndex % Math.max(1, Math.min(4, tops.length));
   const picks = tops.length ? [tops[k % tops.length], tops[(k + 1) % tops.length]].filter((v, i, a) => v && a.indexOf(v) === i) : [];
   const include = [...new Set([...picks, p.season[0]])].slice(0, 3);
-  return { include, exclude: p.exclude, maxMinutes: p.maxMinutes, difficulty: p.difficulty, servings: p.servings, diets: p.diets, excludeAllergens: p.excludeAllergens, cuisine: p.cuisine, kidsMode: p.kidsMode, limit: 3,
+  return { include, exclude: p.exclude, maxMinutes: p.maxMinutes, difficulty: p.difficulty, servings: p.servings, diets: p.diets, excludeAllergens: p.excludeAllergens, cuisine: p.cuisine, cuisines: p.cuisine && p.cuisine !== 'any' ? p.cuisine.split(' + ') : [], kidsMode: p.kidsMode, limit: 3,
     dish: `AIchef.food Magazine, ${p.month} issue: three distinct dishes for this cook — a light starter or small plate, a main course, and a dessert or seasonal showpiece. Seasonal for ${p.month} in the UK, special but achievable.` };
 }
 

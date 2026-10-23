@@ -6,7 +6,7 @@ const cookieParser = require('cookie-parser'); const bcrypt = require('bcryptjs'
 const { z } = require('zod');
 const { open } = require('./db'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
 const { plans, isPremium, isAdmin, isTester } = require('./plans'); const images = require('./images');
-const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14 } = require('./recipes');
+const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14, RECIPES } = require('./recipes'); const community = require('./community'); const CR = require('./community-routes');
 
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
@@ -18,7 +18,7 @@ const SearchSchema = z.object({
   servings: z.coerce.number().int().min(1).max(12).default(2),
   diets: z.array(z.enum(DIETS)).max(6).default([]),
   excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
-  cuisine: z.string().trim().max(40).default('any'), kidsMode: z.boolean().default(false),
+  cuisine: z.string().trim().max(40).default('any'), cuisines: z.array(z.string().trim().min(1).max(40).regex(/^[\p{L} '\-&()]+$/u)).max(8).default([]), kidsMode: z.boolean().default(false),
   escoffier: z.string().regex(/^\d{1,4}[a-z]?$/).optional()
 }).refine(q => q.include.length || q.dish, { message: 'Add at least one ingredient or describe a dish' });
 const AuthSchema = z.object({ email: z.string().trim().toLowerCase().email().max(200), password: z.string().min(8).max(200), name: z.string().trim().max(80).optional() });
@@ -115,14 +115,21 @@ function createApp({ db = open(), stripe } = {}) {
   // ---- Config / health ----
   app.get('/api/health', (req, res) => res.json({ ok: true, ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!stripe }));
   app.get('/api/plans', (req, res) => res.json({ plans: Object.values(plans()).map(({ priceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(stripe && priceId) })) }));
-  app.get('/api/options', (req, res) => res.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set(require('./recipes').RECIPES.map(r => r.cuisine))].sort()] }));
+  app.get('/api/options', (req, res) => res.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...require('./recipes').RECIPES.map(r => r.cuisine), ...require('./community').FUSION_CUISINES])].sort()] }));
 
+  // ---- Community adapter (shared with the Worker) ----
+  const cq = { all: async (sql, p) => db.prepare(sql).all(...p), get: async (sql, p) => db.prepare(sql).get(...p) || null, run: async (sql, p) => db.prepare(sql).run(...p) };
+  const ctx = req => ({ q: cq, user: req.user || null, params: req.params, query: req.query, body: req.body, library: RECIPES,
+    actor: req.user ? 'u:' + req.user.id : 'ip:' + community.fnv(String(req.ip || 'anon')), escOne: no => escoffier.one((sql, p) => db.prepare(sql).all(...p), no) });
+  const send = (res, r) => res.status(r.status).json(r.json);
   // ---- Search ----
   app.post('/api/search', searchLimiter, needAuth, a(async (req, res) => {
     const p = SearchSchema.safeParse(req.body); if (!p.success) return bad(res, p.error);
     const u = req.user, prem = isPremium(u), pl = plans();
     if (!prem && u.searches_used >= pl.free.searches) return res.status(402).json({ error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' });
-    const q = { ...p.data, difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
+    const cuisines = community.normCuisines(p.data.cuisines, p.data.cuisine);
+    const q = { ...p.data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
+    try { q.inspiration = await community.inspiration(cq, u.id); } catch {}
     if (q.kidsMode && !prem) q.kidsMode = true; // kids mode allowed in trial so families can try it
     const all = (sql, params) => db.prepare(sql).all(...params);
     let references = []; try { references = await escoffier.references(all, q, { pinned: q.escoffier }); } catch (e) { console.error('escoffier', e.message); }
@@ -145,13 +152,23 @@ function createApp({ db = open(), stripe } = {}) {
 
   // ---- Favourites / history (premium) ----
   const RecipeBlob = z.object({ id: z.string().max(120), title: z.string().max(140) }).passthrough();
-  app.get('/api/favourites', needAuth, needPremium, (req, res) => res.json({ favourites: db.prepare('SELECT recipe_json FROM favourites WHERE user_id=? ORDER BY id DESC').all(req.user.id).map(r => JSON.parse(r.recipe_json)) }));
-  app.post('/api/favourites', needAuth, needPremium, (req, res) => {
+  app.get('/api/favourites', needAuth, needPremium, a(async (req, res) => send(res, await CR.H.favList(ctx(req)))));
+  app.post('/api/favourites', needAuth, needPremium, a(async (req, res) => {
     const p = RecipeBlob.safeParse(req.body && req.body.recipe); if (!p.success) return bad(res, p.error);
     const json = JSON.stringify(p.data); if (json.length > 60000) return res.status(413).json({ error: 'Recipe too large' });
-    db.prepare('INSERT OR REPLACE INTO favourites(user_id,recipe_id,recipe_json) VALUES(?,?,?)').run(req.user.id, p.data.id, json); res.status(201).json({ ok: true });
-  });
-  app.delete('/api/favourites/:id', needAuth, needPremium, (req, res) => { db.prepare('DELETE FROM favourites WHERE user_id=? AND recipe_id=?').run(req.user.id, String(req.params.id).slice(0, 120)); res.json({ ok: true }); });
+    send(res, await CR.H.favAdd(ctx(req), async r => db.prepare('INSERT INTO favourites(user_id,recipe_id,recipe_json) VALUES(?,?,?) ON CONFLICT(user_id,recipe_id) DO UPDATE SET recipe_json=excluded.recipe_json').run(req.user.id, r.id, JSON.stringify(r))));
+  }));
+  app.delete('/api/favourites/:id', needAuth, needPremium, (req, res) => { db.prepare('DELETE FROM favourites WHERE user_id=? AND recipe_id=?').run(req.user.id, String(req.params.id).slice(0, 120)); CR.bust(); res.json({ ok: true }); });
+  // ---- Ratings, top-rated, engagement, synced preferences ----
+  const rateLimiter = rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false });
+  app.get('/api/recipes/stats', a(async (req, res) => send(res, await CR.H.stats(ctx(req)))));
+  app.get('/api/recipes/top', a(async (req, res) => send(res, await CR.H.top(ctx(req)))));
+  app.get('/api/recipes/:id', a(async (req, res) => send(res, await CR.H.one(ctx(req)))));
+  app.put('/api/recipes/:id/rating', rateLimiter, a(async (req, res) => send(res, await CR.H.rate(ctx(req)))));
+  app.delete('/api/recipes/:id/rating', rateLimiter, a(async (req, res) => send(res, await CR.H.unrate(ctx(req)))));
+  app.post('/api/recipes/:id/event', rateLimiter, a(async (req, res) => send(res, await CR.H.event(ctx(req)))));
+  app.get('/api/prefs', a(async (req, res) => send(res, await CR.H.prefsGet(ctx(req)))));
+  app.put('/api/prefs', a(async (req, res) => send(res, await CR.H.prefsPut(ctx(req)))));
   app.get('/api/history', needAuth, needPremium, (req, res) => res.json({ history: db.prepare('SELECT id,query_json,titles,created_at FROM history WHERE user_id=? ORDER BY id DESC LIMIT 50').all(req.user.id).map(h => ({ ...h, query: JSON.parse(h.query_json), query_json: undefined })) }));
 
   // ---- Share ----

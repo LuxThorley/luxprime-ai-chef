@@ -50,7 +50,10 @@ const REF_RULE = `\n${escoffier.PRINCIPLES} Add "inspiredBy":"<Escoffier number>
 function buildUserPrompt(q, refs) {
   return JSON.stringify({ ...(refs && refs.length ? { references: refs.map(r => ({ no: r.no, title: r.title, role: r.role, text: r.text })) } : {}),
     include: q.include, exclude: q.exclude, dish: q.dish || null, maxMinutes: q.maxMinutes, difficulty: q.difficulty || 'any',
-    servings: q.servings, diets: q.diets, cuisine: q.cuisine || 'any', kidsMode: !!q.kidsMode, count: q.limit || 4
+    servings: q.servings, diets: q.diets, cuisine: q.cuisine || 'any', kidsMode: !!q.kidsMode, count: q.limit || 4,
+    ...(q.cuisines && q.cuisines.length > 1 ? { cuisines: q.cuisines, fusion: `Create fusion dishes that genuinely blend ${q.cuisines.join(', ')} techniques and flavours. Set "cuisine" to "${q.cuisines.join('–')} fusion" and let the title reflect the fusion where natural.` } : {}),
+    ...(q.inspiration && (q.inspiration.topRated || []).length ? { communityFavourites: q.inspiration.topRated.map(t => `${t.title} (${t.cuisine || 'any'}, ${t.avg}★ from ${t.count})`), inspirationRule: 'Optional loose inspiration only: members rate these highly. Never copy them; the request above always wins.' } : {}),
+    ...(q.inspiration && (q.inspiration.likes || []).length ? { memberLikes: q.inspiration.likes } : {})
   });
 }
 function extractJson(text) {
@@ -97,7 +100,7 @@ async function generate(q, { fetchImpl, retries = 2, references = [] } = {}) {
         const ingredients = r.ingredients.map(x => ({ ...x, display: x.qty == null ? x.name : (x.unit === 'x' ? `${x.qty} ${x.name}` : `${x.qty} ${x.unit} ${x.name}`) }));
         const { inspiredBy, ...rest } = r; const esc = escoffier.cite(r, references);
         return {
-          ...rest, ...(esc ? { escoffier: esc } : {}), id: `ai-${Date.now()}-${i}`, ingredients, baseServings: r.servings,
+          ...rest, ...(esc ? { escoffier: esc } : {}), id: require('./community').aiId(r), ingredients, baseServings: r.servings,
           steps: r.steps.map((s, n) => ({ n: n + 1, ...s })),
           nutritionPerServing: { ...r.nutritionPerServing, isEstimate: true },
           diet: Object.fromEntries((q.diets || []).map(d => [d, true])),
