@@ -36,7 +36,7 @@ const EVENT_KINDS = ['view', 'cook', 'share', 'pdf'];
 const Prefs = z.object({
   diets: z.array(z.string().max(30)).max(6).default([]), servings: z.coerce.number().int().min(1).max(12).optional(),
   cuisines: z.array(z.string().trim().min(1).max(40)).max(8).default([]), difficulty: z.enum(['easy', 'medium', 'hard', 'any']).optional(),
-  maxMinutes: z.coerce.number().int().min(5).max(480).optional(), kidsMode: z.boolean().optional(), inspirationMode: z.enum(['escoffier', 'blend', 'malcolm']).optional(),
+  maxMinutes: z.coerce.number().int().min(5).max(480).optional(), kidsMode: z.boolean().optional(), inspirationMode: z.enum(['escoffier', 'blend', 'malcolm', 'dioscorides']).optional(),
   recent: z.array(z.object({ label: z.string().max(60), i: z.string().max(400).optional().default(''), d: z.string().max(200).optional().default('') })).max(8).default([])
 });
 

@@ -12,7 +12,7 @@ const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
   include: z.array(tag).max(20).default([]), exclude: z.array(tag).max(20).default([]),
-  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]), skipClarify: z.boolean().optional(),
+  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm','dioscorides']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]), skipClarify: z.boolean().optional(),
   maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'),
   servings: z.coerce.number().int().min(1).max(12).default(2),
@@ -129,7 +129,7 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
   // ---- Config / health ----
   app.get('/api/health', (req, res) => res.json({ ok: true, ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!stripe }));
   app.get('/api/plans', (req, res) => res.json({ plans: Object.values(plans()).map(({ priceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(stripe && priceId) })) }));
-  app.get('/api/options', (req, res) => res.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...require('./recipes').RECIPES.map(r => r.cuisine), ...require('./community').FUSION_CUISINES])].sort()] }));
+  app.get('/api/options', (req, res) => res.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...require('./recipes').RECIPES.map(r => r.cuisine), ...require('./community').FUSION_CUISINES, 'Medicinal'])].sort()] }));
 
   // ---- Community adapter (shared with the Worker) ----
   const cq = { all: async (sql, p) => db.prepare(sql).all(...p), get: async (sql, p) => db.prepare(sql).get(...p) || null, run: async (sql, p) => db.prepare(sql).run(...p) };
@@ -147,7 +147,7 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
     try { q.inspiration = await community.inspiration(cq, u.id); } catch {}
     if (q.kidsMode && !prem) q.kidsMode = true; // kids mode allowed in trial so families can try it
     const all = (sql, params) => db.prepare(sql).all(...params);
-    let references = []; try { references = await (q.inspirationMode === 'malcolm' && !q.escoffier ? [] : escoffier.references(all, q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e.message); }
+    let references = []; try { references = await ((q.inspirationMode === 'malcolm' || q.inspirationMode === 'dioscorides') && !q.escoffier ? [] : escoffier.references(all, q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e.message); }
     const [out, answer] = await Promise.all([ai.generate(q, { references }), chatMod.answerBrief(q.brief, q, { llm: opts.llm }).catch(() => null)]);
     const recipes = out.recipes.map(r => {
       const img = images.curatedImage(r);
@@ -178,6 +178,8 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
   }));
 
 
+  // ---- Dioscorides, De Materia Medica (Medicinal cuisine) ----
+  app.get('/api/dioscorides', (req, res) => res.json(require('./dioscorides').list(req.query)));
   // ---- Escoffier Classics (public domain, 1907) ----
   const escAll = (sql, params) => db.prepare(sql).all(...params);
   app.get('/api/escoffier', a(async (req, res) => res.json(await escoffier.list(escAll, req.query))));

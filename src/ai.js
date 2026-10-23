@@ -5,6 +5,7 @@ const { rank, shoppingList } = require('./ranker');
 const { UK14 } = require('./recipes');
 const { isUnsafe, enforceAllergens } = require('./safety');
 const escoffier = require('./escoffier');
+const dioscorides = require('./dioscorides');
 
 const Ingredient = z.object({ name: z.string().min(1).max(120), qty: z.number().nonnegative().nullable(), unit: z.enum(['g','ml','tsp','tbsp','x','pinch','']) });
 const Recipe = z.object({
@@ -50,13 +51,15 @@ const REF_RULE = `\n${escoffier.PRINCIPLES} Add "inspiredBy":"<Escoffier number>
 const MODE_RULE = {
   escoffier: `\nINSPIRATION MODE = ESCOFFIER (strictly classical): every recipe must be a faithful adaptation of the closest supplied Escoffier entry to the cook's ingredients and needs — keep his technique, sauce/fond logic and flavour structure; only modernise measures, timings and food safety. Set "inspiredBy" on every recipe. If fusion cuisines are requested, keep the classical base and bring the other cuisines through seasoning or garnish only.`,
   blend: `\nINSPIRATION MODE = MALCOLM & ESCOFFIER: blend Escoffier's techniques and themes with your own modern creativity and contemporary flavour combinations; cite an entry via "inspiredBy" only when a recipe genuinely draws on it.`,
+  dioscorides: `\nINSPIRATION MODE = DIOSCORIDES: Pedanius Dioscorides (c. 40–90 AD) is your primary influence. ${dioscorides.RULE}`,
   malcolm: `\nINSPIRATION MODE = MALCOLM AI CHEF ONLY: free modern creativity with no Escoffier grounding; set "inspiredBy" to null.`
 };
 const BRIEF_RULE = `\nThe "brief" field is the cook's own words. Honour every explicit constraint in brief.constraints: kcalMax = max kcal per serving, proteinMin = min protein g per serving, budgetGBP = total ingredient budget in pounds, spice = heat 0-10, avoid = never use, moods = flavours/textures/occasion to deliver, memory = an experience to evoke. Treat the rest of brief.raw as creative direction. If brief.question is true, add a top-level "answer": a direct, specific, useful answer in 2-4 sentences (no blessing), then give the recipes.`;
 function buildUserPrompt(q, refs) {
+  const med = dioscorides.active(q);
   return JSON.stringify({ ...(refs && refs.length ? { references: refs.map(r => ({ no: r.no, title: r.title, role: r.role, text: r.text })) } : {}),
     include: q.include, exclude: q.exclude, dish: q.dish || null, maxMinutes: q.maxMinutes, difficulty: q.difficulty || 'any',
-    servings: q.servings, diets: q.diets, cuisine: q.cuisine || 'any', kidsMode: !!q.kidsMode, count: q.limit || 4,
+    servings: q.servings, diets: q.diets, cuisine: med ? dioscorides.cuisineDirective(q) : (q.cuisine || 'any'), ...(med ? { medicinal: { rule: dioscorides.RULE, disclaimer: dioscorides.DISCLAIMER } } : {}), kidsMode: !!q.kidsMode, count: q.limit || 4,
     ...(q.cuisines && q.cuisines.length > 1 ? { cuisines: q.cuisines, fusion: `Create fusion dishes that genuinely blend ${q.cuisines.join(', ')} techniques and flavours. Set "cuisine" to "${q.cuisines.join('–')} fusion" and let the title reflect the fusion where natural.` } : {}),
     ...(q.inspiration && (q.inspiration.topRated || []).length ? { communityFavourites: q.inspiration.topRated.map(t => `${t.title} (${t.cuisine || 'any'}, ${t.avg}★ from ${t.count})`), inspirationRule: 'Optional loose inspiration only: members rate these highly. Never copy them; the request above always wins.' } : {}),
     ...(q.inspiration && (q.inspiration.likes || []).length ? { memberLikes: q.inspiration.likes } : {}),
@@ -96,20 +99,24 @@ async function callProvider(c, messages, fetchImpl = fetch) {
 
 async function generate(q, { fetchImpl, retries = 2, references = [] } = {}) {
   const c = config();
-  if (!aiEnabled()) return { source: 'offline', recipes: rank(q, { limit: q.limit || 4 }) };
+  if (!aiEnabled()) return { source: 'offline', recipes: offlineTag(q, rank(q, { limit: q.limit || 4 })) };
   const mode = MODE_RULE[q.inspirationMode] ? q.inspirationMode : 'blend';
-  const messages = [{ role: 'system', content: SYSTEM + (references.length && mode !== 'malcolm' ? REF_RULE : '') + MODE_RULE[mode] + (q.brief && q.brief.raw ? BRIEF_RULE : '') }, { role: 'user', content: buildUserPrompt(q, references) }];
+  const med = dioscorides.active(q);
+  if (med) { const dref = dioscorides.references(q); const esc = mode === 'malcolm' || mode === 'dioscorides' ? [] : references.filter(r => !String(r.no).startsWith('D')).slice(0, 2); references = [...dref.slice(0, 6 - esc.length), ...esc]; }
+  const messages = [{ role: 'system', content: SYSTEM + (references.length && mode !== 'malcolm' && mode !== 'dioscorides' ? REF_RULE : '') + MODE_RULE[mode] + (med && mode !== 'dioscorides' ? '\n' + dioscorides.RULE : '') + (q.brief && q.brief.raw ? BRIEF_RULE : '') }, { role: 'user', content: buildUserPrompt(q, references) }];
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const raw = await callProvider(c, messages, fetchImpl);
-      const parsed = ResponseSchema.parse(extractJson(raw));
-      const recipes = parsed.recipes.filter(r => !isUnsafe(r)).map((r, i) => {
+      const j = extractJson(raw); if (j && Array.isArray(j.recipes)) j.recipes.forEach(r => { if (r && typeof r.cuisine === 'string' && r.cuisine.length > 40) r.cuisine = med ? (q.cuisines || []).length > 1 ? q.cuisines.join('–').slice(0, 33) + ' fusion' : 'Medicinal' : r.cuisine.slice(0, 40); });
+      const parsed = ResponseSchema.parse(j);
+      const recipes = parsed.recipes.filter(r => !isUnsafe(r) && !(med && dioscorides.unsafe(r))).map((r, i) => {
         enforceAllergens(r);
         const ingredients = r.ingredients.map(x => ({ ...x, display: x.qty == null ? x.name : (x.unit === 'x' ? `${x.qty} ${x.name}` : `${x.qty} ${x.unit} ${x.name}`) }));
-        const { inspiredBy, ...rest } = r; const esc = mode === 'malcolm' ? null : escoffier.cite(r, references);
+        const { inspiredBy, ...rest } = r; const esc = mode === 'malcolm' || mode === 'dioscorides' || /^D/i.test(String(inspiredBy || '')) ? null : escoffier.cite(r, references);
+        const dio = med || mode === 'dioscorides' ? dioscorides.cite(r) : null;
         return {
-          ...rest, ...(esc ? { escoffier: esc } : {}), id: require('./community').aiId(r), ingredients, baseServings: r.servings,
+          ...rest, ...(esc ? { escoffier: esc } : {}), ...(dio ? { dioscorides: dio, medicinalNote: dioscorides.DISCLAIMER, healthBenefits: dioscorides.healthBenefits(r), cuisine: medCuisine(q) } : {}), id: require('./community').aiId(r), ingredients, baseServings: r.servings,
           steps: r.steps.map((s, n) => ({ n: n + 1, ...s })),
           nutritionPerServing: { ...r.nutritionPerServing, isEstimate: true },
           diet: Object.fromEntries((q.diets || []).map(d => [d, true])),
@@ -123,6 +130,12 @@ async function generate(q, { fetchImpl, retries = 2, references = [] } = {}) {
       messages.push({ role: 'user', content: `Your previous reply was invalid (${String(e.message).slice(0, 300)}). Reply again with ONLY valid JSON matching the schema.` });
     }
   }
-  return { source: 'offline', fallbackReason: String(lastErr && lastErr.message), recipes: rank(q, { limit: q.limit || 4 }) };
+  return { source: 'offline', fallbackReason: String(lastErr && lastErr.message), recipes: offlineTag(q, rank(q, { limit: q.limit || 4 })) };
+}
+const medCuisine = q => { const o = (q.cuisines || []).filter(c => !dioscorides.isMedicinalCuisine(c)); return o.length ? ('Medicinal–' + o.join('–')).slice(0, 33) + ' fusion' : 'Medicinal'; };
+// Offline/fallback recipes still get Dioscorides citations + the historical note when Medicinal is on.
+function offlineTag(q, recipes) {
+  if (!dioscorides.active(q)) return recipes;
+  return recipes.filter(r => !dioscorides.unsafe(r)).map(r => ({ ...r, dioscorides: dioscorides.cite(r), medicinalNote: dioscorides.DISCLAIMER, healthBenefits: dioscorides.healthBenefits(r) }));
 }
 module.exports = { generate, aiEnabled, config, ResponseSchema, extractJson, buildUserPrompt, MODE_RULE };

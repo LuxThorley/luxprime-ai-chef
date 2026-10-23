@@ -18,6 +18,7 @@ import CRmod from '../../src/community-routes.js';
 const CR = CRmod;
 import briefMod from '../../src/brief.js';
 import chat from '../../src/chat.js';
+import dioscorides from '../../src/dioscorides.js';
 import verifyMod from '../../src/verify.js';
 import mailer from '../../src/mailer.js';
 
@@ -26,7 +27,7 @@ const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
   include: z.array(tag).max(20).default([]), exclude: z.array(tag).max(20).default([]),
-  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]), skipClarify: z.boolean().optional(), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
+  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm','dioscorides']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]), skipClarify: z.boolean().optional(), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'), servings: z.coerce.number().int().min(1).max(12).default(2),
   diets: z.array(z.enum(DIETS)).max(6).default([]), excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
   cuisine: z.string().trim().max(40).default('any'), cuisines: z.array(z.string().trim().min(1).max(40).regex(/^[\p{L} '\-&()]+$/u)).max(8).default([]), kidsMode: z.boolean().default(false),
@@ -174,7 +175,7 @@ app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
 app.delete('/api/me', needAuth, async c => { if (isTester(c.get('user'))) return c.json({ error: 'The shared test account can’t be deleted from the site' }, 403); await db(c).prepare('DELETE FROM users WHERE id=?').bind(c.get('user').id).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/health', c => c.json({ ok: true, runtime: 'cloudflare-workers', ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!c.env.STRIPE_SECRET_KEY }));
 app.get('/api/plans', c => { const s = !!c.env.STRIPE_SECRET_KEY; const m = plansMod.magazine(); return c.json({ plans: Object.values(plans()).map(({ priceId, annualPriceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(s && priceId), availableAnnual: p.id === 'free' || !!(s && annualPriceId) })), magazine: { price: m.price, annualPrice: m.annualPrice, savePct: m.savePct } }); });
-app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...RECIPES.map(r => r.cuisine), ...community.FUSION_CUISINES])].sort()] }));
+app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...RECIPES.map(r => r.cuisine), ...community.FUSION_CUISINES, 'Medicinal'])].sort()] }));
 
 // Core search, shared by /api/search and Ask Malcolm regenerations. Returns [status, payload].
 async function doSearch(c, u, data) {
@@ -188,7 +189,7 @@ async function doSearch(c, u, data) {
   // Same-account workers.dev subrequests are blocked, so reach the Malcolm worker through its service binding.
   const mBase = String(c.env.MALCOLM_AI_URL || '').replace(/\/+$/, '');
   const fetchImpl = (url, opts) => (c.env.MALCOLM && mBase && String(url).startsWith(mBase)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
-  let references = []; try { references = await (q.inspirationMode === 'malcolm' && !q.escoffier ? [] : escoffier.references(d1all(c), q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e && e.message); }
+  let references = []; try { references = await ((q.inspirationMode === 'malcolm' || q.inspirationMode === 'dioscorides') && !q.escoffier ? [] : escoffier.references(d1all(c), q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e && e.message); }
   const [out, answer] = await Promise.all([ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1), references }), chat.answerBrief(q.brief, q, { llm: chat.malcolmLlm(c.env, fetchImpl) }).catch(() => null)]);
   let recipes = out.recipes.map(r => ({ ...r, image: imagesMod.curatedImage(r), safetyNotes: safetyNotes(r, q) }));
   // AI dishes get an AI photo, generated lazily by GET /api/dish-image/:key (never blocks the recipe text).
@@ -229,6 +230,7 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
 
 // Escoffier Classics (public domain, 1907) — browse/search + single entry.
 const d1all = c => async (sql, params) => (await db(c).prepare(sql).bind(...params).all()).results;
+app.get('/api/dioscorides', c => { const r = c.json(dioscorides.list(c.req.query())); r.headers.set('Cache-Control', 'public, max-age=300'); return r; });
 app.get('/api/escoffier', async c => { const r = c.json(await escoffier.list(d1all(c), c.req.query())); r.headers.set('Cache-Control', 'public, max-age=300'); return r; });
 app.get('/api/escoffier/:no', async c => { const r = await escoffier.one(d1all(c), c.req.param('no')); return r ? c.json(r) : c.json({ error: 'Not found' }, 404); });
 

@@ -70,7 +70,7 @@ function clarify(q) {
 }
 
 function summariseContext(ctx = {}) {
-  return { include: ctx.include || [], exclude: ctx.exclude || [], brief: String(ctx.dish || '').slice(0, 1000), maxMinutes: ctx.maxMinutes, servings: ctx.servings, diets: ctx.diets || [], cuisines: ctx.cuisines || [], inspirationMode: ctx.inspirationMode || 'blend', kidsMode: !!ctx.kidsMode };
+  return { ...(require('./dioscorides').active({ cuisines: ctx.cuisines || [], inspirationMode: ctx.inspirationMode }) ? { medicinal: 'Medicinal (Dioscorides) is on: ground answers in De Materia Medica, cite entries as "Dioscorides, De Materia Medica II.xx", frame properties historically ("Dioscorides held that…"), never claim to treat or cure, add a one-line not-medical-advice note and pregnancy/allergy cautions where relevant; never suggest rue, pennyroyal, wormwood or toxic plants.' } : {}), include: ctx.include || [], exclude: ctx.exclude || [], brief: String(ctx.dish || '').slice(0, 1000), maxMinutes: ctx.maxMinutes, servings: ctx.servings, diets: ctx.diets || [], cuisines: ctx.cuisines || [], inspirationMode: ctx.inspirationMode || 'blend', kidsMode: !!ctx.kidsMode };
 }
 function buildChatMessages(req) {
   const { message, history, context, recipes, recipe } = req;

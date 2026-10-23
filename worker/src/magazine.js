@@ -40,7 +40,7 @@ export async function buildIssue(env, user, { fetchImpl, issueNo = 1, manageUrl,
   const t0 = Date.now(); const all = async (sql, p) => (await env.DB.prepare(sql).bind(...p).all()).results;
   const [history, favourites] = await Promise.all([all('SELECT query_json FROM history WHERE user_id=? ORDER BY id DESC LIMIT 60', [user.id]), all('SELECT recipe_json FROM favourites WHERE user_id=? ORDER BY id DESC LIMIT 30', [user.id])]);
   const profile = mag.buildProfile({ history, favourites, user }, now); const q = mag.buildQuery(profile);
-  try { const pr = (await all('SELECT prefs_json FROM user_prefs WHERE user_id=?', [user.id]))[0]; const m = pr && JSON.parse(pr.prefs_json).inspirationMode; if (['escoffier', 'blend', 'malcolm'].includes(m)) q.inspirationMode = m; } catch {}
+  try { const pr = (await all('SELECT prefs_json FROM user_prefs WHERE user_id=?', [user.id]))[0]; const m = pr && JSON.parse(pr.prefs_json).inspirationMode; if (['escoffier', 'blend', 'malcolm', 'dioscorides'].includes(m)) q.inspirationMode = m; } catch {}
   let references = []; try { if (q.inspirationMode !== 'malcolm') references = await escoffier.references(all, q, q.inspirationMode === 'escoffier' ? { top: 5 } : {}); } catch (e) { console.error('mag escoffier', e && e.message); }
   const out = await ai.generate(q, { fetchImpl, retries: 0, references });
   if ((out.source === 'offline' || out.fallbackReason) && !allowLibrary) throw new Error('AI_BUSY');

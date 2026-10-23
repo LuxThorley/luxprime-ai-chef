@@ -1,4 +1,5 @@
 'use strict';
+const dioscorides = require('./dioscorides');
 // Free-text brief → structured hints. Deterministic and conservative: only extracts what is clearly stated.
 // Returns { raw, hints: { key: { value, label } }, question }. Users can drop any hint by key (ignore list).
 const DIET_WORDS = { vegetarian: /\bveggie|vegetarian\b/i, vegan: /\bvegan|plant[- ]based\b/i, 'gluten-free': /\bgluten[- ]?free|coeliac|celiac\b/i, 'dairy-free': /\bdairy[- ]?free|lactose[- ]?free|no dairy\b/i, 'nut-free': /\bnut[- ]?free|no nuts?\b/i, halal: /\bhalal\b/i };
@@ -23,6 +24,8 @@ function parseBrief(input) {
   if (avoid.length) set('avoid', [...new Set(avoid)].slice(0, 8), 'avoid ' + [...new Set(avoid)].slice(0, 8).join(', '));
   const moods = MOODS.filter(w => new RegExp(`\\b${w}\\b`).test(t)); if (moods.length) set('moods', moods.slice(0, 6), moods.slice(0, 6).join(' · '));
   if ((m = t.match(/(?:\b(?:like|reminds? me of|just like)\s+|^)((?:my|that|the) [a-z' ]{3,50}?)(?=\s*(?:[,.;!?]|\bbut\b|\band\b|\bwith\b|$))/)) && /\b(my|that)\b/.test(m[1])) set('memory', m[1].trim(), `memory: ${m[1].trim()}`);
+  const med = dioscorides.intents(t); const explicit = /\b(medicinal|dioscorides|healing herbs?|herbal remed\w*)\b/.test(t);
+  if (med.length || explicit) set('medicinal', med, 'Medicinal (Dioscorides)' + (med.length ? ': ' + med.map(k => dioscorides.INTENTS[k].label).join(' · ') : ''));
   const question = /\?\s*$|^(what|how|can|could|which|why|is|should|do|does|any)\b/.test(t.trim());
   return { raw, hints: h, question };
 }
@@ -33,6 +36,7 @@ function applyHints(q, b) {
   if (h.maxMinutes) out.maxMinutes = Math.max(5, Math.min(out.maxMinutes || 480, h.maxMinutes.value));
   if (h.servings) out.servings = h.servings.value;
   if (h.diets) out.diets = [...new Set([...(out.diets || []), ...h.diets.value])];
+  if (h.medicinal && !(out.cuisines || []).some(dioscorides.isMedicinalCuisine)) { out.cuisines = [...(out.cuisines || []), 'Medicinal'].slice(0, 8); out.cuisine = out.cuisines.length > 1 ? out.cuisines.join(' + ') + ' fusion' : 'Medicinal'; }
   if (h.avoid) out.exclude = [...new Set([...(out.exclude || []), ...h.avoid.value])].slice(0, 20);
   return out;
 }

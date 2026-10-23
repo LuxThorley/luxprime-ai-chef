@@ -347,3 +347,7 @@ input[aria-invalid=true]{border-color:#e0786a}
 .chat-form textarea{flex:1;min-height:46px;resize:none;line-height:1.4}
 .chat-form .btn{min-height:46px}
 @media (max-width:560px){.msg{max-width:94%}.chat-log{max-height:60vh}}
+
+.mode-dioscorides{background:#e7f0e0;color:#2f4a22;border-color:#7a9a5a}.pill.dio-badge{display:inline-block;text-decoration:none;color:#5f8a45;border-color:#7a9a5a;background:color-mix(in srgb,#7a9a5a 10%,transparent);margin:2px 2px 2px 0}.medi-note{font-size:.85rem;border-left:3px solid #7a9a5a;padding:.5em .8em;background:color-mix(in srgb,#7a9a5a 8%,transparent);border-radius:6px}.dio-caution{font-size:.82rem;color:#b5651d;margin:.3em 0}
+.health-b{margin:.6em 0;padding:.6em .8em;border:1px solid #7a9a5a55;border-radius:8px}.health-b ul{margin:.4em 0;padding-left:1.1em}.health-b li{margin:.45em 0;font-size:.9rem}.hb-h{color:inherit}.hb-m{color:#5f8a45}
+.seg-insp{display:grid;grid-template-columns:1fr 1fr;gap:4px}.seg-insp label{min-width:0}.seg-insp span{white-space:normal;line-height:1.2;font-size:.9rem;padding:8px 6px}
