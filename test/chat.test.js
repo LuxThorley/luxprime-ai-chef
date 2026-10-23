@@ -67,3 +67,8 @@ test('malcolmLlm calls Malcolm /v1/chat and falls back to Workers AI', async () 
   const fb = await C.malcolmLlm({ ...env, AI: { run: async () => ({ response: '{"reply":"wai"}' }) } }, async () => ({ ok: false, status: 502 }))([{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }]);
   assert.equal(fb, '{"reply":"wai"}');
 });
+
+test('respond tolerates sloppy model JSON (long suggestions, string numbers, nulls)', async () => {
+  const r = await C.respond({ message: 'what wine?', history: [], context: {}, recipes: [] }, { llm: async () => JSON.stringify({ reply: 'A Rioja.', action: 'answer', changes: { spice: null, maxMinutes: '30' }, suggestions: ['x'.repeat(90), 'b', 'c', 'd', 'e', 'f'] }) });
+  assert.equal(r.reply, 'A Rioja.'); assert.equal(r.action, 'answer'); assert.equal(r.suggestions.length, 5); assert.equal(r.suggestions[0].length, 60);
+});

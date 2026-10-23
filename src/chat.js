@@ -96,13 +96,23 @@ function offlineReply(req, p) {
   if (p.refine) return { reply: `Right you are — reworking the recipes with that in mind.`, action: 'regenerate', changes: p.changes, suggestions: ['Spicier', 'Make it cheaper', 'What wine?'] };
   return { reply: `I’m a touch busy at the pass just now — ask me again in a moment, or tell me how to tweak the recipes (spicier, cheaper, vegan…).`, action: 'answer', changes: {}, suggestions: ['Spicier', 'Make it vegan', 'Quicker'] };
 }
+// Tolerant normalisation of model JSON: trims overlong fields, drops invalid change values instead of failing the turn.
+function lenient(j) {
+  if (!j || typeof j !== 'object') throw new Error('chat reply not an object');
+  const reply = String(j.reply || j.answer || j.message || '').trim().slice(0, 1500); if (!reply) throw new Error('empty reply');
+  const action = ['answer', 'regenerate', 'clarify'].includes(j.action) ? j.action : 'answer';
+  const changes = {}; const raw = j.changes && typeof j.changes === 'object' ? j.changes : {};
+  for (const [k, sch] of Object.entries(Changes.shape)) { if (raw[k] == null) continue; const v = Array.isArray(raw[k]) ? raw[k].map(x => String(x).slice(0, 40)).slice(0, 10) : raw[k]; const r = sch.safeParse(typeof v === 'string' && /^\d+(\.\d+)?$/.test(v) ? Number(v) : v); if (r.success) changes[k] = r.data; }
+  const suggestions = (Array.isArray(j.suggestions) ? j.suggestions : []).map(x => String(x).trim().slice(0, 60)).filter(Boolean).slice(0, 5);
+  return { reply, action, changes, suggestions };
+}
 // Core turn: returns {reply, action, changes, suggestions}. Heuristic changes are merged in so obvious asks are never missed.
 async function respond(req, { llm } = {}) {
   const p = parseRefinement(req.message);
   let out;
   if (llm) {
-    try { out = ChatOut.parse(extract(await llm(buildChatMessages(req), { maxTokens: LIMITS.maxTokens }))); }
-    catch (e) { out = null; }
+    try { out = lenient(extract(await llm(buildChatMessages(req), { maxTokens: LIMITS.maxTokens }))); }
+    catch (e) { out = null; if (typeof console !== 'undefined') console.error('chat llm', e && e.message); }
   }
   if (!out) out = offlineReply(req, p);
   if (req.recipe) out.action = 'answer';
