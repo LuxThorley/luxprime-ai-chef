@@ -134,6 +134,22 @@ function workersAiLlm(env) {
     return out && out.response !== undefined ? out.response : out;
   };
 }
+// Malcolm worker's conversational endpoint (POST {base}/v1/chat), with Workers AI as a fallback.
+function malcolmLlm(env, fetchImpl = fetch) {
+  const base = String((env && env.MALCOLM_AI_URL) || '').replace(/\/+$/, '').replace(/\/(omni\/command|v1\/recipes)$/, '');
+  const wai = workersAiLlm(env);
+  if (!base || !env.MALCOLM_AI_KEY) return wai;
+  return async (messages, { maxTokens = LIMITS.maxTokens } = {}) => {
+    try {
+      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), +env.CHAT_TIMEOUT_MS || 30000);
+      try {
+        const r = await fetchImpl(base + '/v1/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.MALCOLM_AI_KEY}` }, body: JSON.stringify({ system: messages[0].content, messages: messages.slice(1), maxTokens }) });
+        if (!r.ok) throw new Error(`Malcolm chat HTTP ${r.status}`);
+        return (await r.json()).text;
+      } finally { clearTimeout(t); }
+    } catch (e) { if (wai) return wai(messages, { maxTokens }); throw e; }
+  };
+}
 // Simple fixed-window limiter over an async q adapter (rate_limits table: k, n, reset_at).
 async function allow(q, key, limit, windowSec = LIMITS.windowSec, now = Math.floor(Date.now() / 1000)) {
   const row = await q.get('SELECT n, reset_at FROM rate_limits WHERE k=?', [key]);
@@ -142,4 +158,4 @@ async function allow(q, key, limit, windowSec = LIMITS.windowSec, now = Math.flo
   await q.run('UPDATE rate_limits SET n=n+1 WHERE k=?', [key]); return { ok: true, left: limit - row.n - 1 };
 }
 const RATE_SQL = 'CREATE TABLE IF NOT EXISTS rate_limits (k TEXT PRIMARY KEY, n INTEGER NOT NULL, reset_at INTEGER NOT NULL)';
-module.exports = { PERSONA, LIMITS, ChatRequest, ChatOut, parseRefinement, applyChanges, clarify, buildChatMessages, respond, answerBrief, workersAiLlm, allow, RATE_SQL, isQuestion };
+module.exports = { malcolmLlm, PERSONA, LIMITS, ChatRequest, ChatOut, parseRefinement, applyChanges, clarify, buildChatMessages, respond, answerBrief, workersAiLlm, allow, RATE_SQL, isQuestion };

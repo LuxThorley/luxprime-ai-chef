@@ -189,7 +189,7 @@ async function doSearch(c, u, data) {
   const mBase = String(c.env.MALCOLM_AI_URL || '').replace(/\/+$/, '');
   const fetchImpl = (url, opts) => (c.env.MALCOLM && mBase && String(url).startsWith(mBase)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
   let references = []; try { references = await (q.inspirationMode === 'malcolm' && !q.escoffier ? [] : escoffier.references(d1all(c), q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e && e.message); }
-  const [out, answer] = await Promise.all([ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1), references }), chat.answerBrief(q.brief, q, { llm: chat.workersAiLlm(c.env) }).catch(() => null)]);
+  const [out, answer] = await Promise.all([ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1), references }), chat.answerBrief(q.brief, q, { llm: chat.malcolmLlm(c.env, fetchImpl) }).catch(() => null)]);
   let recipes = out.recipes.map(r => ({ ...r, image: imagesMod.curatedImage(r), safetyNotes: safetyNotes(r, q) }));
   // AI dishes get an AI photo, generated lazily by GET /api/dish-image/:key (never blocks the recipe text).
   if (out.source !== 'offline' && c.env.IMAGES && c.env.AI) {
@@ -211,7 +211,9 @@ app.post('/api/chat', rl('chat-ip', 30, 300), needAuth, async c => {
   const p = chat.ChatRequest.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user'); const req = p.data;
   const lim = await chat.allow(cq(c), `chat:u${u.id}`, isPremium(u) ? chat.LIMITS.paid : chat.LIMITS.free);
   if (!lim.ok) return c.json({ error: `Malcolm needs a breather — you've reached this hour's chat limit${isPremium(u) ? '' : ' (upgrade for more)'}. Try again in ${Math.ceil(lim.retryAfter / 60)} min.`, retryAfter: lim.retryAfter, ...(isPremium(u) ? {} : { upgrade: '/pricing.html' }) }, 429);
-  const out = await chat.respond(req, { llm: chat.workersAiLlm(c.env) });
+  const mB = String(c.env.MALCOLM_AI_URL || '').replace(/\/+$/, '');
+  const fImpl = (url, opts) => (c.env.MALCOLM && mB && String(url).startsWith(mB)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
+  const out = await chat.respond(req, { llm: chat.malcolmLlm(c.env, fImpl) });
   const base = { reply: out.reply, action: out.action, suggestions: out.suggestions, chatLeft: lim.left };
   if (out.action !== 'regenerate' || req.recipe) return c.json({ ...base, action: out.action === 'regenerate' ? 'answer' : out.action, context: req.context });
   const s = SearchSchema.safeParse({ ...chat.applyChanges(req.context, out.changes), skipClarify: true });

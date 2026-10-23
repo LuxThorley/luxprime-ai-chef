@@ -58,3 +58,12 @@ test('API: search answers questions & clarifies; chat refines, answers, rate-lim
   db.prepare("UPDATE rate_limits SET n=999 WHERE k LIKE 'chat:%'").run();
   const lim = await ag.post('/api/chat').set('x-csrf-token', t).send({ message: 'hello' }); assert.equal(lim.status, 429); assert.match(lim.body.error, /breather/);
 });
+
+test('malcolmLlm calls Malcolm /v1/chat and falls back to Workers AI', async () => {
+  let seen; const ok = async (url, o) => { seen = { url, body: JSON.parse(o.body), auth: o.headers.Authorization }; return { ok: true, json: async () => ({ text: '{"reply":"hi"}' }) }; };
+  const env = { MALCOLM_AI_URL: 'https://m.example/v1/recipes', MALCOLM_AI_KEY: 'k' };
+  assert.equal(await C.malcolmLlm(env, ok)([{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }]), '{"reply":"hi"}');
+  assert.equal(seen.url, 'https://m.example/v1/chat'); assert.equal(seen.body.system, 'S'); assert.deepEqual(seen.body.messages, [{ role: 'user', content: 'U' }]);
+  const fb = await C.malcolmLlm({ ...env, AI: { run: async () => ({ response: '{"reply":"wai"}' }) } }, async () => ({ ok: false, status: 502 }))([{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }]);
+  assert.equal(fb, '{"reply":"wai"}');
+});
