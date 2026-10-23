@@ -16,13 +16,14 @@ import * as members from './members.js';
 import community from '../../src/community.js';
 import CRmod from '../../src/community-routes.js';
 const CR = CRmod;
+import briefMod from '../../src/brief.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
   include: z.array(tag).max(20).default([]), exclude: z.array(tag).max(20).default([]),
-  dish: z.string().trim().max(200).optional().default(''), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
+  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'), servings: z.coerce.number().int().min(1).max(12).default(2),
   diets: z.array(z.enum(DIETS)).max(6).default([]), excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
   cuisine: z.string().trim().max(40).default('any'), cuisines: z.array(z.string().trim().min(1).max(40).regex(/^[\p{L} '\-&()]+$/u)).max(8).default([]), kidsMode: z.boolean().default(false),
@@ -166,11 +167,12 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   if (!prem && u.searches_used >= pl.free.searches) return c.json({ error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' }, 402);
   const cuisines = community.normCuisines(p.data.cuisines, p.data.cuisine);
   const q = { ...p.data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
+  const brief = briefMod.without(briefMod.parseBrief(p.data.dish), p.data.briefIgnore); Object.assign(q, briefMod.applyHints(q, brief)); q.brief = { raw: brief.raw, constraints: Object.fromEntries(Object.entries(brief.hints).map(([k, v]) => [k, v.value])), question: brief.question };
   try { q.inspiration = await community.inspiration(cq(c), u.id); } catch {}
   // Same-account workers.dev subrequests are blocked, so reach the Malcolm worker through its service binding.
   const mBase = String(c.env.MALCOLM_AI_URL || '').replace(/\/+$/, '');
   const fetchImpl = (url, opts) => (c.env.MALCOLM && mBase && String(url).startsWith(mBase)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
-  let references = []; try { references = await escoffier.references(d1all(c), q, { pinned: q.escoffier }); } catch (e) { console.error('escoffier', e && e.message); }
+  let references = []; try { references = await (q.inspirationMode === 'malcolm' && !q.escoffier ? [] : escoffier.references(d1all(c), q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e && e.message); }
   const out = await ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1), references });
   let recipes = out.recipes.map(r => ({ ...r, image: imagesMod.curatedImage(r), safetyNotes: safetyNotes(r, q) }));
   // AI dishes get an AI photo, generated lazily by GET /api/dish-image/:key (never blocks the recipe text).
@@ -187,7 +189,7 @@ app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
     db(c).prepare('UPDATE users SET searches_used = searches_used + ? WHERE id=?').bind(prem ? 0 : 1, u.id), // Commis Chef allowance only counts non-paid, non-trial searches
     db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify(p.data), recipes.map(r => r.title).join(' · '))]);
   const fresh = await members.effectiveUser(db(c), await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first());
-  return c.json({ source: out.source, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
+  return c.json({ source: out.source, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, inspirationMode: q.inspirationMode, understood: briefMod.summary(brief), question: brief.question, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
 });
 
 // Escoffier Classics (public domain, 1907) — browse/search + single entry.
@@ -214,6 +216,7 @@ app.get('/api/recipes/:id', async c => send(c, await CR.H.one(await cctx(c))));
 app.put('/api/recipes/:id/rating', rl('rate', 30, 60), async c => send(c, await CR.H.rate(await cctx(c, true))));
 app.delete('/api/recipes/:id/rating', rl('rate', 30, 60), async c => send(c, await CR.H.unrate(await cctx(c))));
 app.post('/api/recipes/:id/event', rl('event', 60, 60), async c => send(c, await CR.H.event(await cctx(c, true))));
+app.post('/api/brief', async c => { const b = briefMod.parseBrief(String(((await body(c)) || {}).text || '')); return c.json({ understood: briefMod.summary(b), question: b.question }); });
 app.get('/api/prefs', async c => send(c, await CR.H.prefsGet(await cctx(c))));
 app.put('/api/prefs', async c => send(c, await CR.H.prefsPut(await cctx(c, true))));
 app.get('/api/history', needAuth, needPremium, async c => { const { results } = await db(c).prepare('SELECT id,query_json,titles,created_at FROM history WHERE user_id=? ORDER BY id DESC LIMIT 50').bind(c.get('user').id).all(); return c.json({ history: results.map(h => ({ id: h.id, titles: h.titles, created_at: h.created_at, query: JSON.parse(h.query_json) })) }); });

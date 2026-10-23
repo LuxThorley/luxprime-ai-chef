@@ -6,13 +6,13 @@ const cookieParser = require('cookie-parser'); const bcrypt = require('bcryptjs'
 const { z } = require('zod');
 const { open } = require('./db'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
 const { plans, isPremium, isAdmin, isTester } = require('./plans'); const images = require('./images');
-const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14, RECIPES } = require('./recipes'); const community = require('./community'); const CR = require('./community-routes');
+const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14, RECIPES } = require('./recipes'); const community = require('./community'); const CR = require('./community-routes'); const briefMod = require('./brief');
 
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
   include: z.array(tag).max(20).default([]), exclude: z.array(tag).max(20).default([]),
-  dish: z.string().trim().max(200).optional().default(''),
+  dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]),
   maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'),
   servings: z.coerce.number().int().min(1).max(12).default(2),
@@ -129,10 +129,11 @@ function createApp({ db = open(), stripe } = {}) {
     if (!prem && u.searches_used >= pl.free.searches) return res.status(402).json({ error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' });
     const cuisines = community.normCuisines(p.data.cuisines, p.data.cuisine);
     const q = { ...p.data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: p.data.difficulty === 'any' ? null : p.data.difficulty, limit: prem ? 5 : pl.free.results };
+    const brief = briefMod.without(briefMod.parseBrief(p.data.dish), p.data.briefIgnore); Object.assign(q, briefMod.applyHints(q, brief)); q.brief = { raw: brief.raw, constraints: Object.fromEntries(Object.entries(brief.hints).map(([k, v]) => [k, v.value])), question: brief.question };
     try { q.inspiration = await community.inspiration(cq, u.id); } catch {}
     if (q.kidsMode && !prem) q.kidsMode = true; // kids mode allowed in trial so families can try it
     const all = (sql, params) => db.prepare(sql).all(...params);
-    let references = []; try { references = await escoffier.references(all, q, { pinned: q.escoffier }); } catch (e) { console.error('escoffier', e.message); }
+    let references = []; try { references = await (q.inspirationMode === 'malcolm' && !q.escoffier ? [] : escoffier.references(all, q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e.message); }
     const out = await ai.generate(q, { references });
     const recipes = out.recipes.map(r => {
       const img = images.curatedImage(r);
@@ -142,7 +143,7 @@ function createApp({ db = open(), stripe } = {}) {
     db.prepare('UPDATE users SET searches_used = searches_used + 1 WHERE id=?').run(u.id);
     db.prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').run(u.id, JSON.stringify(p.data), recipes.map(r => r.title).join(' · '));
     const fresh = db.prepare('SELECT * FROM users WHERE id=?').get(u.id);
-    res.json({ source: out.source, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
+    res.json({ source: out.source, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, inspirationMode: q.inspirationMode, understood: briefMod.summary(brief), question: brief.question, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) });
   }));
 
   // ---- Escoffier Classics (public domain, 1907) ----
@@ -167,6 +168,7 @@ function createApp({ db = open(), stripe } = {}) {
   app.put('/api/recipes/:id/rating', rateLimiter, a(async (req, res) => send(res, await CR.H.rate(ctx(req)))));
   app.delete('/api/recipes/:id/rating', rateLimiter, a(async (req, res) => send(res, await CR.H.unrate(ctx(req)))));
   app.post('/api/recipes/:id/event', rateLimiter, a(async (req, res) => send(res, await CR.H.event(ctx(req)))));
+  app.post('/api/brief', a(async (req, res) => { const b = briefMod.parseBrief(String((req.body && req.body.text) || '')); res.json({ understood: briefMod.summary(b), question: b.question }); }));
   app.get('/api/prefs', a(async (req, res) => send(res, await CR.H.prefsGet(ctx(req)))));
   app.put('/api/prefs', a(async (req, res) => send(res, await CR.H.prefsPut(ctx(req)))));
   app.get('/api/history', needAuth, needPremium, (req, res) => res.json({ history: db.prepare('SELECT id,query_json,titles,created_at FROM history WHERE user_id=? ORDER BY id DESC LIMIT 50').all(req.user.id).map(h => ({ ...h, query: JSON.parse(h.query_json), query_json: undefined })) }));
