@@ -1,4 +1,4 @@
-# Lux Prime Kitchen — AI Chef (powered by Malcolm AI)
+# AIchef.food — AI Chef (powered by Malcolm AI)
 
 **Live preview:** https://luxthorley.github.io/luxprime-ai-chef/
 
@@ -123,7 +123,7 @@ generated on demand via `/api/dish-image?title=…`, cached in `IMAGE_CACHE_DIR`
 
 ## Stripe setup (use TEST mode first)
 1. Create four Products in Stripe, each with two recurring GBP Prices (monthly / annual): Chef de Partie £4.99 / £49,
-   Head Chef £7.99 / £79, Gastronomique £11.99 / £119, Lux Prime Kitchen Magazine add-on £3.49 / £34.90. Copy the `price_…` IDs into
+   Head Chef £7.99 / £79, Gastronomique £11.99 / £119, AIchef.food Magazine add-on £3.49 / £34.90. Copy the `price_…` IDs into
    `STRIPE_PRICE_CHEF_DE_PARTIE`, `STRIPE_PRICE_HEAD_CHEF`, `STRIPE_PRICE_GASTRONOMIQUE`, `STRIPE_PRICE_MAGAZINE` and the
    matching `…_ANNUAL` variables (`STRIPE_PRICE_CHEF_DE_PARTIE_ANNUAL`, `STRIPE_PRICE_HEAD_CHEF_ANNUAL`, `STRIPE_PRICE_GASTRONOMIQUE_ANNUAL`, `STRIPE_PRICE_MAGAZINE_ANNUAL`);
    put your `sk_test_…` key in `STRIPE_SECRET_KEY`. (Legacy `STRIPE_PRICE_MONTHLY`/`STRIPE_PRICE_FAMILY` still work as fallbacks.)

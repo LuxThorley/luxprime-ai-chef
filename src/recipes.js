@@ -75,7 +75,7 @@ function expand(r) {
     ingredients, steps, allergens, diet, tags: r.tags || [], substitutions,
     nutritionPerServing: { kcal: r.n[0], proteinG: r.n[1], carbsG: r.n[2], fatG: r.n[3], isEstimate: true },
     kidFriendly: (r.tags || []).includes('kids') || r.d === 'easy',
-    source: 'Lux Prime Kitchen curated library'
+    source: 'AIchef.food curated library'
   };
 }
 const RECIPES = RAW.map(expand);

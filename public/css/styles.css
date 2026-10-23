@@ -93,7 +93,7 @@ body{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/20
 @keyframes lp-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
 @media (prefers-reduced-motion:reduce){.photo.shimmer{animation:none}}
 /* dish-images v2 */
-/* Lux Prime Kitchen Magazine */
+/* AIchef.food Magazine */
 .mag-cover{display:block;border-radius:6px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.55),0 0 0 1px color-mix(in srgb,var(--gold) 35%,transparent);transform:rotate(-1.5deg);transition:transform .4s ease;margin:auto}.mag-cover:hover{transform:rotate(0) scale(1.02)}.mag-cover img{display:block;width:100%;height:auto}
 .mag-feature h2{font-family:var(--serif);font-size:clamp(2rem,4vw,3rem);margin:.3em 0}.mag-list{padding-left:0;list-style:none}.mag-list li{padding:5px 0}.mag-list li:before{content:"— ";color:var(--gold)}
 .mag-card{margin-top:28px;border-color:color-mix(in srgb,var(--gold) 55%,transparent)}.mag-card .split{grid-template-columns:.7fr 1.3fr}
@@ -104,3 +104,6 @@ body{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/20
 .hh-list{list-style:none;padding:0}.hh-list li{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
 #plans{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
 .bill-toggle{display:inline-flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:99px;margin:6px 0 22px}.bill-toggle button{border:0;background:none;color:var(--mute);font:600 .95rem var(--font);padding:9px 18px;border-radius:99px;cursor:pointer}.bill-toggle button[aria-checked=true]{background:var(--gold);color:#1b1406}.save{background:color-mix(in srgb,var(--ok) 20%,transparent);color:var(--ok);font-size:.75rem;font-weight:700;padding:2px 8px;border-radius:99px}.bill-toggle button[aria-checked=true] .save{background:#1b140620;color:#1b1406}.plan-sub{margin:-6px 0 8px;font-size:.88rem}
+/* AIchef.food wordmark */
+.brand .wordmark{font-family:var(--serif);letter-spacing:.01em}
+.brand .wordmark em{font-style:italic;color:#d9a86c}

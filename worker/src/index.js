@@ -1,4 +1,4 @@
-// Lux Prime Kitchen AI Chef — Cloudflare Worker (Hono + D1 + Workers Assets). Mirrors src/server.js API.
+// AIchef.food — Cloudflare Worker (Hono + D1 + Workers Assets). Mirrors src/server.js API.
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { z } from 'zod';
@@ -268,10 +268,10 @@ app.get('/r/:id', async c => {
   if (!row) return c.html(tpl.replace('<!--OG-->', '<meta name="robots" content="noindex">'), 404);
   const r = JSON.parse(row.recipe_json); const base = appUrl(c); const url = `${base}/r/${id}`;
   const img = r.image && r.image.og ? base + r.image.og : `${base}/img/hero.jpg`;
-  const desc = `${r.cuisine || ''} · ${r.totalMinutes || '?'} min · ${r.difficulty || ''} — a Lux Prime Kitchen AI Chef recipe, powered by Malcolm AI.`;
-  const og = [['og:type','article'],['og:site_name','Lux Prime Kitchen'],['og:title',r.title],['og:description',desc],['og:url',url],['og:image',img]].map(([p, v]) => `<meta property="${p}" content="${escH(v)}">`).join('')
+  const desc = `${r.cuisine || ''} · ${r.totalMinutes || '?'} min · ${r.difficulty || ''} — an AIchef.food recipe by Malcolm, your AI chef.`;
+  const og = [['og:type','article'],['og:site_name','AIchef.food'],['og:title',r.title],['og:description',desc],['og:url',url],['og:image',img]].map(([p, v]) => `<meta property="${p}" content="${escH(v)}">`).join('')
     + [['twitter:card','summary_large_image'],['twitter:title',r.title],['twitter:description',desc],['twitter:image',img]].map(([n, v]) => `<meta name="${n}" content="${escH(v)}">`).join('') + `<link rel="canonical" href="${escH(url)}">`;
-  return c.html(tpl.replace('<!--OG-->', og).replace(/<title>[^<]*<\/title>/, `<title>${escH(r.title)} · Lux Prime Kitchen</title>`).replace('data-share-id=""', `data-share-id="${escH(id)}"`));
+  return c.html(tpl.replace('<!--OG-->', og).replace(/<title>[^<]*<\/title>/, `<title>${escH(r.title)} · AIchef.food</title>`).replace('data-share-id=""', `data-share-id="${escH(id)}"`));
 });
 
 // ---- Gastronomique household seats ----
@@ -282,8 +282,8 @@ app.post('/api/members/invite', rl('invite', 20, 3600), needAuth, async c => {
   const r = await members.invite(db(c), u, p.data.email); if (r.error) return c.json({ error: r.error }, r.status);
   const link = `${appUrl(c)}/account.html?invite=${r.token}`; let emailed = false;
   if (magW.emailReady(c.env)) { try {
-    const who = u.name || u.email; const res = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${c.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: c.env.MAGAZINE_FROM, to: [p.data.email], subject: `${who} invited you to their Lux Prime Kitchen Gastronomique plan`,
-      text: `${who} has invited you to join their Lux Prime Kitchen Gastronomique household: unlimited AI chef recipes and your own personalised monthly magazine.\n\nAccept (sign in or create a free account with this email address): ${link}\n\nIf you weren't expecting this, just ignore this email.` }) }); emailed = res.ok; } catch (e) { console.error('invite email', e && e.message); } }
+    const who = u.name || u.email; const res = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${c.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: c.env.MAGAZINE_FROM, to: [p.data.email], subject: `${who} invited you to their AIchef.food Gastronomique plan`,
+      text: `${who} has invited you to join their AIchef.food Gastronomique · Lux Prime household: unlimited AI chef recipes and your own personalised monthly magazine.\n\nAccept (sign in or create a free account with this email address): ${link}\n\nIf you weren't expecting this, just ignore this email.` }) }); emailed = res.ok; } catch (e) { console.error('invite email', e && e.message); } }
   return c.json({ ok: true, emailed, link });
 });
 app.delete('/api/members/me', needAuth, async c => { await members.leave(db(c), c.get('user')); return c.json({ ok: true }); });
@@ -295,7 +295,7 @@ app.post('/api/members/accept', rl('accept', 20, 3600), needAuth, async c => {
   return c.json({ ok: true, user: publicUser(await members.effectiveUser(db(c), raw)) });
 });
 
-// ---- Lux Prime Kitchen Magazine ----
+// ---- AIchef.food Magazine ----
 const malcolmFetch = env => { const mBase = String(env.MALCOLM_AI_URL || '').replace(/\/+$/, ''); return (url, opts) => (env.MALCOLM && mBase && String(url).startsWith(mBase)) ? env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts); };
 const magTier = (u, row) => isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u._trial ? 'trial' : magW.entitled(u, row) ? 'subscriber' : isPremium(u) ? 'member' : 'free';
 async function previewsToday(c, uid) { return ((await db(c).prepare("SELECT COUNT(*) n FROM magazine_issues WHERE user_id=? AND kind='preview' AND created_at>=date('now')").bind(uid).first()) || {}).n || 0; }
@@ -333,7 +333,7 @@ app.get('/m/issue/:token', async c => {
   const pdf = await c.env.IMAGES.get(`mag/${t}.pdf`, 'arrayBuffer'); if (!pdf) return c.text('This issue has expired', 404);
   return new Response(pdf, { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': 'inline; filename="Lux-Prime-Kitchen-Magazine.pdf"', 'Cache-Control': 'private, max-age=3600', 'X-Robots-Tag': 'noindex' } });
 });
-const unsubPage = (msg, form = '') => `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Magazine emails · Lux Prime Kitchen</title><link rel="stylesheet" href="/css/styles.css"></head><body><main class="wrap" style="max-width:560px;padding:64px 20px"><span class="eyebrow">Lux Prime Kitchen Magazine</span><h1 style="font-family:var(--serif)">Email preferences</h1><p>${msg}</p>${form}<p class="muted" style="font-size:.9rem">To cancel the magazine add-on itself, use <a href="/account.html#magazine">your account</a> (Manage billing).</p></main></body></html>`;
+const unsubPage = (msg, form = '') => `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Magazine emails · AIchef.food</title><link rel="stylesheet" href="/css/styles.css"></head><body><main class="wrap" style="max-width:560px;padding:64px 20px"><span class="eyebrow">AIchef.food Magazine</span><h1 style="font-family:var(--serif)">Email preferences</h1><p>${msg}</p>${form}<p class="muted" style="font-size:.9rem">To cancel the magazine add-on itself, use <a href="/account.html#magazine">your account</a> (Manage billing).</p></main></body></html>`;
 app.get('/m/unsubscribe', async c => {
   const t = String(c.req.query('t') || ''); if (!/^[0-9a-f]{48}$/.test(t)) return c.html(unsubPage('This link isn’t valid. You can manage emails from your account.'), 400);
   return c.html(unsubPage('Stop receiving the monthly magazine by email?', `<form method="post" action="/m/unsubscribe?t=${t}"><button class="btn">Unsubscribe</button></form>`));

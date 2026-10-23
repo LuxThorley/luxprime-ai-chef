@@ -36,7 +36,7 @@ function config() {
 }
 function aiEnabled() { const c = config(); return c.provider !== 'none' && !!c.url; }
 
-const SYSTEM = `You are the Lux Prime Kitchen AI Chef (powered by Malcolm AI). Return ONLY JSON matching:
+const SYSTEM = `You are Malcolm, the AI chef of AIchef.food. Return ONLY JSON matching:
 {"recipes":[{"title","cuisine","difficulty":"easy|medium|hard","totalMinutes":int,"servings":int,"matchScore":0-100,"whyItFits",
 "ingredients":[{"name","qty":number|null,"unit":"g|ml|tsp|tbsp|x|pinch|"}],"steps":[{"text","timerMinutes":int|null}],
 "allergens":[UK 14 allergen names: ${UK14.join(', ')}],"nutritionPerServing":{"kcal","proteinG","carbsG","fatG"},

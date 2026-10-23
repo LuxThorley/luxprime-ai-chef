@@ -57,7 +57,7 @@
     if((r.substitutions||[]).length){line('Substitutions',13,'bold',2);r.substitutions.forEach(s=>line(`•  ${s.ingredient} → ${s.swap}`))}
     if((r.safetyNotes||[]).length){y+=3;line('Food safety',13,'bold',2);r.safetyNotes.forEach(s=>line('•  '+s,9))}
     const n=r.nutritionPerServing;y+=3;line(`Nutrition per serving (estimate): ${n.kcal} kcal · ${n.proteinG}g protein${r.nutritionPartial?'':` · ${n.carbsG}g carbs · ${n.fatG}g fat`}`,9,'italic');
-    y+=4;line('Lux Prime Kitchen · AI Chef powered by Malcolm AI · Always check allergen labels.',8,'italic');
+    y+=4;line('AIchef.food · Malcolm, your AI chef · Always check allergen labels.',8,'italic');
     d.save(`${fname(r)}.pdf`);
   }
   async function imageCard(r){
@@ -65,11 +65,11 @@
     x.fillStyle='#141517';x.fillRect(0,0,1080,1350);
     try{const i=await loadImg((r.image&&(r.image.large||r.image.src))||'/img/ingredients.webp');const sc=Math.max(1080/i.width,760/i.height);x.drawImage(i,(1080-i.width*sc)/2,(760-i.height*sc)/2,i.width*sc,i.height*sc)}catch{}
     const g=x.createLinearGradient(0,560,0,800);g.addColorStop(0,'rgba(20,21,23,0)');g.addColorStop(1,'#141517');x.fillStyle=g;x.fillRect(0,540,1080,260);
-    x.fillStyle='#d9a86c';x.font='600 26px Inter, sans-serif';x.fillText('LUX PRIME KITCHEN · AI CHEF',60,800);
+    x.fillStyle='#d9a86c';x.font='600 26px Inter, sans-serif';x.fillText('AICHEF.FOOD · MALCOLM, YOUR AI CHEF',60,800);
     x.fillStyle='#f5efe4';x.font='700 64px Georgia, serif';let y=880;wrap(x,r.title,60,y,960,72).forEach(l=>{x.fillText(l,60,y);y+=72});
     x.font='400 30px Inter, sans-serif';x.fillStyle='#d2c9ba';x.fillText(`⏱ ${r.totalMinutes} min  ·  ${r.difficulty}  ·  serves ${r.servings||r.baseServings}  ·  ${r.cuisine}`,60,y+10);y+=70;
     x.font='400 28px Inter, sans-serif';x.fillStyle='#f5efe4';r.ingredients.slice(0,6).forEach(i=>{if(y<1250){x.fillText('• '+(i.display||i.name),60,y);y+=42}});
-    x.fillStyle='#c27c4a';x.fillRect(60,1290,960,2);x.fillStyle='#bdb5a8';x.font='400 22px Inter, sans-serif';x.fillText('Powered by Malcolm AI · luxprimekitchen',60,1325);
+    x.fillStyle='#c27c4a';x.fillRect(60,1290,960,2);x.fillStyle='#bdb5a8';x.font='400 22px Inter, sans-serif';x.fillText('Ask Malcolm · aichef.food',60,1325);
     c.toBlob(async b=>{const file=new File([b],`${fname(r)}.png`,{type:'image/png'});
       if(navigator.canShare&&navigator.canShare({files:[file]})&&matchMedia('(pointer:coarse)').matches){try{await navigator.share({files:[file],title:r.title});return}catch{}}
       const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=file.name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4000);LP.toast('Image card downloaded')},'image/png');
@@ -80,7 +80,7 @@
     if(!row.hidden){row.hidden=true;btn.setAttribute('aria-expanded','false');return}
     let url=shareId?location.href:null;
     if(!url){try{url=(await LP.api('/api/share',{method:'POST',body:{recipe:r}})).url}catch(e){LP.toast(e.message);return}}
-    const text=`${r.title} — a Lux Prime Kitchen AI Chef recipe`;const u=encodeURIComponent(url),t=encodeURIComponent(text);
+    const text=`${r.title} — an AIchef.food recipe by Malcolm`;const u=encodeURIComponent(url),t=encodeURIComponent(text);
     const img=encodeURIComponent(new URL((r.image&&r.image.og)||'/img/hero.jpg',location.origin).href);
     const links=[['X',`https://twitter.com/intent/tweet?text=${t}&url=${u}`],['Facebook',`https://www.facebook.com/sharer/sharer.php?u=${u}`],['WhatsApp',`https://wa.me/?text=${t}%20${u}`],['Pinterest',`https://pinterest.com/pin/create/button/?url=${u}&media=${img}&description=${t}`],['LinkedIn',`https://www.linkedin.com/sharing/share-offsite/?url=${u}`],['Email',`mailto:?subject=${t}&body=${t}%0A%0A${u}`]];
     row.innerHTML=`${navigator.share?'<button class="btn sm" data-native>📱 Share…</button>':''}<button class="btn ghost sm" data-copy>🔗 Copy link</button>`+links.map(([n,h])=>`<a class="btn ghost sm" href="${esc(h)}" target="_blank" rel="noopener noreferrer">${n}</a>`).join('');

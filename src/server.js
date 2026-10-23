@@ -182,11 +182,11 @@ function createApp({ db = open(), stripe } = {}) {
     if (!row) return res.status(404).send(shareTpl().replace('<!--OG-->', '<meta name="robots" content="noindex">'));
     const r = JSON.parse(row.recipe_json); const url = `${APP_URL}/r/${req.params.id}`;
     const img = r.image && r.image.og && !r.image.generated ? APP_URL + r.image.og : r.image && r.image.generated ? APP_URL + r.image.src : `${APP_URL}/img/hero.jpg`;
-    const desc = `${r.whyItFits ? '' : ''}${r.cuisine || ''} · ${r.totalMinutes || '?'} min · ${r.difficulty || ''} — a Lux Prime Kitchen AI Chef recipe, powered by Malcolm AI.`;
-    const og = [['og:type','article'],['og:site_name','Lux Prime Kitchen'],['og:title',r.title],['og:description',desc],['og:url',url],['og:image',img]].map(([p,c]) => `<meta property="${p}" content="${escH(c)}">`).join('')
+    const desc = `${r.whyItFits ? '' : ''}${r.cuisine || ''} · ${r.totalMinutes || '?'} min · ${r.difficulty || ''} — an AIchef.food recipe by Malcolm, your AI chef.`;
+    const og = [['og:type','article'],['og:site_name','AIchef.food'],['og:title',r.title],['og:description',desc],['og:url',url],['og:image',img]].map(([p,c]) => `<meta property="${p}" content="${escH(c)}">`).join('')
       + [['twitter:card','summary_large_image'],['twitter:title',r.title],['twitter:description',desc],['twitter:image',img]].map(([n,c]) => `<meta name="${n}" content="${escH(c)}">`).join('')
       + `<link rel="canonical" href="${escH(url)}">`;
-    res.send(shareTpl().replace('<!--OG-->', og).replace(/<title>[^<]*<\/title>/, `<title>${escH(r.title)} · Lux Prime Kitchen</title>`).replace('data-share-id=""', `data-share-id="${escH(req.params.id)}"`));
+    res.send(shareTpl().replace('<!--OG-->', og).replace(/<title>[^<]*<\/title>/, `<title>${escH(r.title)} · AIchef.food</title>`).replace('data-share-id=""', `data-share-id="${escH(req.params.id)}"`));
   });
 
   // ---- Billing ----
@@ -216,6 +216,6 @@ function createApp({ db = open(), stripe } = {}) {
 
 if (require.main === module) {
   const port = +process.env.PORT || 3000;
-  createApp().listen(port, () => console.log(`Lux Prime Kitchen AI Chef on http://localhost:${port} (AI: ${ai.config().provider})`));
+  createApp().listen(port, () => console.log(`AIchef.food on http://localhost:${port} (AI: ${ai.config().provider})`));
 }
 module.exports = { createApp, SearchSchema };

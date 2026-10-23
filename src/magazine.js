@@ -1,5 +1,5 @@
 'use strict';
-// Lux Prime Kitchen Magazine — personalisation (profile, query, shopping list, pairings, letter) + PDF layout.
+// AIchef.food Magazine — personalisation (profile, query, shopping list, pairings, letter) + PDF layout.
 const { Doc, wrap, width } = require('./pdf');
 const { clean } = require('./dishimage');
 
@@ -53,7 +53,7 @@ function buildQuery(p) {
   const picks = tops.length ? [tops[k % tops.length], tops[(k + 1) % tops.length]].filter((v, i, a) => v && a.indexOf(v) === i) : [];
   const include = [...new Set([...picks, p.season[0]])].slice(0, 3);
   return { include, exclude: p.exclude, maxMinutes: p.maxMinutes, difficulty: p.difficulty, servings: p.servings, diets: p.diets, excludeAllergens: p.excludeAllergens, cuisine: p.cuisine, kidsMode: p.kidsMode, limit: 3,
-    dish: `Lux Prime Kitchen Magazine, ${p.month} issue: three distinct dishes for this cook — a light starter or small plate, a main course, and a dessert or seasonal showpiece. Seasonal for ${p.month} in the UK, special but achievable.` };
+    dish: `AIchef.food Magazine, ${p.month} issue: three distinct dishes for this cook — a light starter or small plate, a main course, and a dessert or seasonal showpiece. Seasonal for ${p.month} in the UK, special but achievable.` };
 }
 
 // ---- Shopping list ----
@@ -123,9 +123,9 @@ const C = { ink: '#16171b', ink2: '#24262c', cream: '#f6f1e7', paper: '#fbf8f2',
 const PW = 595.28, PH = 841.89, M = 48;
 function render(data, imgs, fontFiles) {
   const { profile: p, recipes, shop, escoffierNote, issueNo, manageUrl } = data;
-  const doc = new Doc({ title: `Lux Prime Kitchen Magazine — ${p.month} ${p.year} — for ${p.name}`, fontFiles });
+  const doc = new Doc({ title: `AIchef.food Magazine — ${p.month} ${p.year} — for ${p.name}`, fontFiles });
   const hero = imgs.hero ? doc.addJpeg(imgs.hero) : null; const dish = recipes.map((_, i) => imgs.dishes[i] ? doc.addJpeg(imgs.dishes[i]) : hero);
-  const folio = (pg, n, dark) => { pg.line(M, PH - 40, PW - M, PH - 40, dark ? '#3a3a3a' : C.rule, 0.5); pg.text('LUX PRIME KITCHEN MAGAZINE', M, PH - 27, { font: 'sansB', size: 6.5, spacing: 1.6, color: dark ? C.gold : C.mute }); pg.text(`${p.month.toUpperCase()} ${p.year}  ·  ${n}`, PW - M, PH - 27, { font: 'sans', size: 6.5, spacing: 1.2, color: dark ? C.gold : C.mute, align: 'right' }); };
+  const folio = (pg, n, dark) => { pg.line(M, PH - 40, PW - M, PH - 40, dark ? '#3a3a3a' : C.rule, 0.5); pg.text('AICHEF.FOOD MAGAZINE', M, PH - 27, { font: 'sansB', size: 6.5, spacing: 1.6, color: dark ? C.gold : C.mute }); pg.text(`${p.month.toUpperCase()} ${p.year}  ·  ${n}`, PW - M, PH - 27, { font: 'sans', size: 6.5, spacing: 1.2, color: dark ? C.gold : C.mute, align: 'right' }); };
   const label = (pg, s, x, y, color = C.copper) => pg.text(s.toUpperCase(), x, y, { font: 'sansB', size: 7, spacing: 1.8, color });
 
   // 1. Cover
@@ -133,9 +133,9 @@ function render(data, imgs, fontFiles) {
   if (hero) pg.image(hero, 0, 0, PW, PH);
   pg.rect(0, 0, PW, 200, C.ink, { alpha: 0.8 }); pg.line(0, 200, PW, 200, C.gold, 0.8, 0.9);
   pg.rect(0, PH - 330, PW, 330, C.ink, { alpha: 0.86 }); pg.line(0, PH - 330, PW, PH - 330, C.gold, 0.8, 0.9);
-  pg.text('LUX PRIME KITCHEN', PW / 2, 58, { font: 'sansB', size: 10, spacing: 6, color: C.gold2, align: 'center' });
+  pg.text('AICHEF.FOOD', PW / 2, 58, { font: 'sansB', size: 10, spacing: 6, color: C.gold2, align: 'center' });
   pg.line(PW / 2 - 140, 72, PW / 2 + 140, 72, C.gold, 0.6);
-  pg.text('Magazine', PW / 2, 138, { font: 'serifI', size: 74, color: C.ivory, align: 'center' });
+  pg.text('Magazine', PW / 2, 138, { font: 'serifI', size: 74, color: C.ivory, align: 'center' }); pg.text('THE LUX PRIME KITCHEN EDITION', PW / 2, 188, { font: 'sansB', size: 6.5, spacing: 2.4, color: C.gold, align: 'center' });
   pg.text(`${p.month.toUpperCase()} ${p.year}   ·   ISSUE ${String(issueNo).toUpperCase()}`, PW / 2, 170, { font: 'sans', size: 8, spacing: 3, color: C.gold2, align: 'center' });
   pg.text(`Prepared for ${p.name}`, M, PH - 286, { font: 'serifI', size: 24, color: C.gold2 });
   pg.line(M, PH - 271, M + 60, PH - 271, C.gold, 1);
@@ -151,7 +151,7 @@ function render(data, imgs, fontFiles) {
   const LW = 300; y = 158;
   const paras = letter(p, recipes, data.blessing);
   paras.forEach((t, i) => { y = pg.para(t, M, y, LW, { font: i === 0 ? 'serifI' : 'serif', size: i === 0 ? 15 : 12, lead: 1.42, color: C.text }) + 8; });
-  y += 4; pg.text('Malcolm', M, y + 14, { font: 'serifI', size: 26, color: C.copper }); pg.text('EXECUTIVE AI CHEF, LUX PRIME KITCHEN', M, y + 32, { font: 'sansB', size: 6.5, spacing: 1.4, color: C.mute });
+  y += 4; pg.text('Malcolm', M, y + 14, { font: 'serifI', size: 26, color: C.copper }); pg.text('YOUR AI CHEF, AICHEF.FOOD', M, y + 32, { font: 'sansB', size: 6.5, spacing: 1.4, color: C.mute });
   const RX = M + LW + 34, RW = PW - RX - M; label(pg, 'In this issue', RX, 160);
   let ry = 182; recipes.forEach((r, i) => { pg.image(dish[i], RX, ry, RW, 82); pg.text(`${String(i + 1).padStart(2, '0')}  ·  PAGE ${i + 3}`, RX, ry + 98, { font: 'sansB', size: 6.5, spacing: 1.2, color: C.copper }); ry = pg.para(r.title, RX, ry + 114, RW, { font: 'serif', size: 12.5, lead: 1.15, color: C.ink, maxLines: 3 }) + 12; });
   [['Your shopping list', 6], ['Wines & accompaniments', 7], ['The Escoffier note', 7]].forEach(([t, n]) => { pg.line(RX, ry - 4, RX + RW, ry - 4, C.rule, 0.5); pg.text(t, RX, ry + 10, { font: 'serif', size: 12, color: C.ink }); pg.text(String(n), RX + RW, ry + 10, { font: 'sans', size: 8, color: C.mute, align: 'right' }); ry += 24; });
@@ -231,7 +231,7 @@ function render(data, imgs, fontFiles) {
   y = pg.para(escoffierNote.note, M + 26, y + 4, PW - 2 * M - 40, { font: 'serif', size: 10.5, lead: 1.4, color: '#d8cfc1', maxLines: 5 });
   const fy = PH - 118; pg.line(M, fy, PW - M, fy, '#3a3a3a', 0.5);
   pg.para('Photographs are AI-generated illustrations. Nutrition is estimated. Allergen tags are guidance only — always check product labels, and adapt to your own dietary needs. Wine suggestions are styles, not endorsements; please drink responsibly (18+).', M, fy + 18, PW - 2 * M, { font: 'sans', size: 6.8, lead: 1.4, color: '#8f8578' });
-  pg.para(`You receive this because you opted in to Lux Prime Kitchen Magazine. Manage, pause or cancel any time: ${manageUrl}`, M, fy + 48, PW - 2 * M, { font: 'sans', size: 6.8, lead: 1.4, color: '#8f8578' });
+  pg.para(`You receive this because you opted in to AIchef.food Magazine. Manage, pause or cancel any time: ${manageUrl}`, M, fy + 48, PW - 2 * M, { font: 'sans', size: 6.8, lead: 1.4, color: '#8f8578' });
   folio(pg, 7, true);
   return doc.save();
 }

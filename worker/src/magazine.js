@@ -1,4 +1,4 @@
-// Lux Prime Kitchen Magazine — Worker side: entitlement, issue generation (Malcolm + FLUX + PDF), storage (KV), email (Resend).
+// AIchef.food Magazine — Worker side: entitlement, issue generation (Malcolm + FLUX + PDF), storage (KV), email (Resend).
 import mag from '../../src/magazine.js';
 import ai from '../../src/ai.js';
 import escoffier from '../../src/escoffier.js';
@@ -63,16 +63,16 @@ export async function sendIssueEmail(env, { to, name, month, year, titles, downl
   if (!emailReady(env)) return { sent: false, reason: 'email-not-configured' };
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const html = `<div style="background:#16171b;padding:32px 0;font-family:Georgia,'Times New Roman',serif"><div style="max-width:560px;margin:0 auto;background:#fbf8f2;padding:36px 40px;color:#25211c">
-<p style="font:600 11px/1 Arial,sans-serif;letter-spacing:4px;color:#a8683e;margin:0 0 18px">LUX PRIME KITCHEN MAGAZINE</p>
+<p style="font:600 11px/1 Arial,sans-serif;letter-spacing:4px;color:#a8683e;margin:0 0 18px">AICHEF.FOOD MAGAZINE</p>
 <h1 style="font-weight:normal;font-style:italic;font-size:34px;margin:0 0 6px">Your ${esc(month)} issue</h1>
 <p style="font-size:17px;line-height:1.5">Dear ${esc(name)}, Malcolm has composed this month’s issue just for you:</p>
 <ul style="font-size:17px;line-height:1.6">${titles.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
 <p style="font-size:16px;line-height:1.5">Plus your aisle-by-aisle shopping list, wine pairings and this month’s Escoffier note.</p>
 <p style="margin:26px 0"><a href="${esc(downloadUrl)}" style="background:#c9a35a;color:#16171b;text-decoration:none;padding:13px 22px;font:600 14px Arial,sans-serif;letter-spacing:1px">DOWNLOAD YOUR MAGAZINE (PDF)</a></p>
-<p style="font:12px/1.6 Arial,sans-serif;color:#7a7065">You’re receiving this because you opted in to Lux Prime Kitchen Magazine. <a href="${esc(unsubUrl)}" style="color:#7a7065">Unsubscribe from these emails</a> · <a href="${esc(manageUrl)}" style="color:#7a7065">Manage or cancel your add-on</a>.</p>
+<p style="font:12px/1.6 Arial,sans-serif;color:#7a7065">You’re receiving this because you opted in to AIchef.food Magazine. <a href="${esc(unsubUrl)}" style="color:#7a7065">Unsubscribe from these emails</a> · <a href="${esc(manageUrl)}" style="color:#7a7065">Manage or cancel your add-on</a>.</p>
 </div></div>`;
-  const body = { from: env.MAGAZINE_FROM, to: [to], subject: `Your Lux Prime Kitchen Magazine — ${month} ${year}`, html,
-    text: `Dear ${name},\n\nYour ${month} issue of Lux Prime Kitchen Magazine is ready: ${titles.join('; ')}.\nDownload: ${downloadUrl}\n\nUnsubscribe: ${unsubUrl}\nManage or cancel: ${manageUrl}\n`,
+  const body = { from: env.MAGAZINE_FROM, to: [to], subject: `Your AIchef.food Magazine — ${month} ${year}`, html,
+    text: `Dear ${name},\n\nYour ${month} issue of AIchef.food Magazine is ready: ${titles.join('; ')}.\nDownload: ${downloadUrl}\n\nUnsubscribe: ${unsubUrl}\nManage or cancel: ${manageUrl}\n`,
     headers: { 'List-Unsubscribe': `<${unsubUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } };
   if (pdf && pdf.length < 8e6 && typeof pdf.toBase64 === 'function') body.attachments = [{ filename: `Lux-Prime-Kitchen-Magazine-${month}-${year}.pdf`, content: pdf.toBase64() }];
   const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
