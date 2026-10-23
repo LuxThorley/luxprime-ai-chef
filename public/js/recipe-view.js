@@ -47,6 +47,7 @@
     if(!window.jspdf){LP.toast('PDF library not loaded — use Print → Save as PDF');return}
     const {jsPDF}=window.jspdf;const d=new jsPDF({unit:'mm',format:'a4'});const W=210,M=16;let y=0;
     try{const i=await loadImg((r.image&&(r.image.large||r.image.src))||'/img/ingredients.webp');const c=document.createElement('canvas');c.width=1200;c.height=500;const x=c.getContext('2d');const sc=Math.max(1200/i.width,500/i.height);x.drawImage(i,(1200-i.width*sc)/2,(500-i.height*sc)/2,i.width*sc,i.height*sc);d.addImage(c.toDataURL('image/jpeg',.82),'JPEG',0,0,W,W*500/1200);y=W*500/1200+10}catch{y=16}
+    try{const m=await loadImg('/img/brand/logo-email.png');const c2=document.createElement('canvas');c2.width=m.width;c2.height=m.height;c2.getContext('2d').drawImage(m,0,0);d.addImage(c2.toDataURL('image/png'),'PNG',W-M-44,y-8,44,44*m.height/m.width);y+=4}catch{}
     const line=(t,size=10,style='normal',gap=1.5)=>{d.setFont('helvetica',style);d.setFontSize(size);d.splitTextToSize(String(t),W-2*M).forEach(l=>{if(y>282){d.addPage();y=16}d.text(l,M,y);y+=size*.42+gap})};
     d.setTextColor(30,28,24);line(r.title,22,'bold',3);if(r.tagline)line(r.tagline,11,'italic',2);if(r.escoffier)line(r.escoffier.label,9,'italic',2);
     line(`${r.totalMinutes} min · ${r.difficulty} · serves ${r.servings||r.baseServings} · ${r.cuisine}`,10,'normal',2);
@@ -57,19 +58,20 @@
     if((r.substitutions||[]).length){line('Substitutions',13,'bold',2);r.substitutions.forEach(s=>line(`•  ${s.ingredient} → ${s.swap}`))}
     if((r.safetyNotes||[]).length){y+=3;line('Food safety',13,'bold',2);r.safetyNotes.forEach(s=>line('•  '+s,9))}
     const n=r.nutritionPerServing;y+=3;line(`Nutrition per serving (estimate): ${n.kcal} kcal · ${n.proteinG}g protein${r.nutritionPartial?'':` · ${n.carbsG}g carbs · ${n.fatG}g fat`}`,9,'italic');
-    y+=4;line('AIchef.food · Malcolm, your AI chef · Always check allergen labels.',8,'italic');
+    y+=4;line('AIchef.food · Ask Malcolm, your AI chef · Always check allergen labels.',8,'italic');
     d.save(`${fname(r)}.pdf`);
   }
   async function imageCard(r){
     const c=document.createElement('canvas');c.width=1080;c.height=1350;const x=c.getContext('2d');
-    x.fillStyle='#141517';x.fillRect(0,0,1080,1350);
+    x.fillStyle='#150d18';x.fillRect(0,0,1080,1350);
     try{const i=await loadImg((r.image&&(r.image.large||r.image.src))||'/img/ingredients.webp');const sc=Math.max(1080/i.width,760/i.height);x.drawImage(i,(1080-i.width*sc)/2,(760-i.height*sc)/2,i.width*sc,i.height*sc)}catch{}
-    const g=x.createLinearGradient(0,560,0,800);g.addColorStop(0,'rgba(20,21,23,0)');g.addColorStop(1,'#141517');x.fillStyle=g;x.fillRect(0,540,1080,260);
-    x.fillStyle='#d9a86c';x.font='600 26px Inter, sans-serif';x.fillText('AICHEF.FOOD · MALCOLM, YOUR AI CHEF',60,800);
-    x.fillStyle='#f5efe4';x.font='700 64px Georgia, serif';let y=880;wrap(x,r.title,60,y,960,72).forEach(l=>{x.fillText(l,60,y);y+=72});
+    const g=x.createLinearGradient(0,560,0,800);g.addColorStop(0,'rgba(21,13,24,0)');g.addColorStop(1,'#150d18');x.fillStyle=g;x.fillRect(0,540,1080,260);
+    x.fillStyle='#ffc24d';x.font='600 26px Inter, sans-serif';x.fillText('ASK MALCOLM, YOUR AI CHEF',60,800);
+    x.fillStyle='#f5efe4';x.font='700 64px Fraunces, Georgia, serif';let y=880;wrap(x,r.title,60,y,960,72).forEach(l=>{x.fillText(l,60,y);y+=72});
     x.font='400 30px Inter, sans-serif';x.fillStyle='#d2c9ba';x.fillText(`⏱ ${r.totalMinutes} min  ·  ${r.difficulty}  ·  serves ${r.servings||r.baseServings}  ·  ${r.cuisine}`,60,y+10);y+=70;
     x.font='400 28px Inter, sans-serif';x.fillStyle='#f5efe4';r.ingredients.slice(0,6).forEach(i=>{if(y<1250){x.fillText('• '+(i.display||i.name),60,y);y+=42}});
-    x.fillStyle='#c27c4a';x.fillRect(60,1290,960,2);x.fillStyle='#bdb5a8';x.font='400 22px Inter, sans-serif';x.fillText('Ask Malcolm · aichef.food',60,1325);
+    const gb=x.createLinearGradient(60,0,1020,0);gb.addColorStop(0,'#f29a1f');gb.addColorStop(.5,'#d7262e');gb.addColorStop(1,'#2f8f4b');x.fillStyle=gb;x.fillRect(60,1262,960,4);
+    try{const m=await loadImg('/img/brand/mark-180.png');x.drawImage(m,60,1282,48,48)}catch{}x.font='800 30px Inter, sans-serif';x.fillStyle='#ff6a4a';x.fillText('AI',122,1318);let wx=122+x.measureText('AI').width;x.font='italic 500 30px Fraunces, Georgia, serif';x.fillStyle='#fff6e6';x.fillText('chef',wx+2,1318);wx+=x.measureText('chef').width+2;x.font='700 30px Fraunces, Georgia, serif';x.fillStyle='#5cc979';x.fillText('.food',wx,1318);
     c.toBlob(async b=>{const file=new File([b],`${fname(r)}.png`,{type:'image/png'});
       if(navigator.canShare&&navigator.canShare({files:[file]})&&matchMedia('(pointer:coarse)').matches){try{await navigator.share({files:[file],title:r.title});return}catch{}}
       const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=file.name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4000);LP.toast('Image card downloaded')},'image/png');

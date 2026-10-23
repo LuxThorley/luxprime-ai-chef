@@ -50,7 +50,8 @@ export async function buildIssue(env, user, { fetchImpl, issueNo = 1, manageUrl,
   const escNo = (recipes.find(r => r.escoffier) || {}).escoffier; let entry = null; if (escNo) { try { entry = await escoffier.getEntry(all, escNo.no); } catch {} }
   const fontFiles = Object.fromEntries(await Promise.all(FONT_KEYS.map(async k => [k, await asset(env, `/mag/${k}.bin`)])));
   const data = { profile, recipes, shop: mag.shoppingList(recipes, profile), issueNo, manageUrl, blessing: out.blessing, escoffierNote: mag.escoffierNote(recipes, entry ? { ...entry, title: escoffier.titleCase(entry.title) } : null, profile) };
-  const pdf = mag.render(data, { hero, dishes: dishImgs }, fontFiles);
+  const mark = await asset(env, '/img/brand/mark-ink.jpg').catch(() => null);
+  const pdf = mag.render(data, { hero, dishes: dishImgs, mark }, fontFiles);
   return { pdf, profile, titles: recipes.map(r => r.title), ms: Date.now() - t0, aiMs: tAI, source: out.source };
 }
 
@@ -62,13 +63,14 @@ export const emailReady = env => !!(env.RESEND_API_KEY && env.MAGAZINE_FROM);
 export async function sendIssueEmail(env, { to, name, month, year, titles, downloadUrl, unsubUrl, manageUrl, pdf }) {
   if (!emailReady(env)) return { sent: false, reason: 'email-not-configured' };
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const html = `<div style="background:#16171b;padding:32px 0;font-family:Georgia,'Times New Roman',serif"><div style="max-width:560px;margin:0 auto;background:#fbf8f2;padding:36px 40px;color:#25211c">
-<p style="font:600 11px/1 Arial,sans-serif;letter-spacing:4px;color:#a8683e;margin:0 0 18px">AICHEF.FOOD MAGAZINE</p>
+  let origin = ''; try { origin = new URL(downloadUrl).origin; } catch {}
+  const html = `<div style="background:#1b1020;padding:32px 0;font-family:Georgia,'Times New Roman',serif"><div style="max-width:560px;margin:0 auto;background:#fbf8f2;padding:36px 40px;color:#25211c">
+<p style="margin:0 0 14px"><img src="${esc(origin)}/img/brand/logo-email.png" width="220" height="47" alt="AIchef.food" style="display:block;border:0"></p><p style="font:600 11px/1 Arial,sans-serif;letter-spacing:4px;color:#b8650f;margin:0 0 18px">AICHEF.FOOD MAGAZINE · THE LUX PRIME KITCHEN EDITION</p>
 <h1 style="font-weight:normal;font-style:italic;font-size:34px;margin:0 0 6px">Your ${esc(month)} issue</h1>
 <p style="font-size:17px;line-height:1.5">Dear ${esc(name)}, Malcolm has composed this month’s issue just for you:</p>
 <ul style="font-size:17px;line-height:1.6">${titles.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
 <p style="font-size:16px;line-height:1.5">Plus your aisle-by-aisle shopping list, wine pairings and this month’s Escoffier note.</p>
-<p style="margin:26px 0"><a href="${esc(downloadUrl)}" style="background:#c9a35a;color:#16171b;text-decoration:none;padding:13px 22px;font:600 14px Arial,sans-serif;letter-spacing:1px">DOWNLOAD YOUR MAGAZINE (PDF)</a></p>
+<p style="margin:26px 0"><a href="${esc(downloadUrl)}" style="background:#f29a1f;color:#2a1104;text-decoration:none;padding:13px 22px;border-radius:999px;font:600 14px Arial,sans-serif;letter-spacing:1px">DOWNLOAD YOUR MAGAZINE (PDF)</a></p>
 <p style="font:12px/1.6 Arial,sans-serif;color:#7a7065">You’re receiving this because you opted in to AIchef.food Magazine. <a href="${esc(unsubUrl)}" style="color:#7a7065">Unsubscribe from these emails</a> · <a href="${esc(manageUrl)}" style="color:#7a7065">Manage or cancel your add-on</a>.</p>
 </div></div>`;
   const body = { from: env.MAGAZINE_FROM, to: [to], subject: `Your AIchef.food Magazine — ${month} ${year}`, html,

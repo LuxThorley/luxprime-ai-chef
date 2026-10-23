@@ -5,6 +5,13 @@
   try{[me,opts]=await Promise.all([api('/api/me').then(d=>d.user),api('/api/options')])}catch{}
   $('#cuisine').innerHTML=opts.cuisines.map(c=>`<option value="${esc(c)}">${c==='any'?'Any':esc(c)}</option>`).join('');
   $('#diets').innerHTML=opts.diets.map(d=>`<label><input type="checkbox" value="${esc(d)}"><span>${esc(d)}</span></label>`).join('');
+  const PK=()=>'lp_prefs_'+(me&&me.id||'anon');
+  const savePrefs=b=>{if(!me)return;try{localStorage.setItem(PK(),JSON.stringify({diets:b.diets,servings:b.servings,cuisine:b.cuisine,difficulty:b.difficulty,maxMinutes:b.maxMinutes,kidsMode:b.kidsMode}))}catch{}};
+  const loadPrefs=()=>{if(!me)return;try{const p=JSON.parse(localStorage.getItem(PK())||'null');if(!p)return;(p.diets||[]).forEach(d=>{const i=document.querySelector(`#diets input[value="${CSS.escape(d)}"]`);if(i)i.checked=true});if(p.servings)$('#servings').value=p.servings;if(p.cuisine&&[...$('#cuisine').options].some(o=>o.value===p.cuisine))$('#cuisine').value=p.cuisine;const r=p.difficulty&&document.querySelector(`[name=diff][value="${CSS.escape(p.difficulty)}"]`);if(r)r.checked=true;if(p.maxMinutes){$('#time').value=p.maxMinutes;$('#time').dispatchEvent(new Event('input'))}$('#kids').checked=!!p.kidsMode;const n=document.createElement('p');n.className='muted';n.style.fontSize='.82rem';n.id='prefNote';n.innerHTML='Using your saved preferences (diet, servings, cuisine). <button type="button" class="btn sm ghost" id="prefReset">Reset</button>';$('#search').prepend(n);$('#prefReset').onclick=()=>{localStorage.removeItem(PK());location.reload()}}catch{}};
+  const recent=()=>{try{return JSON.parse(localStorage.getItem('lp_recent')||'[]')}catch{return[]}};
+  const pushRecent=b=>{const label=(b.dish||b.include.join(', ')).slice(0,40);if(!label)return;const r=recent().filter(x=>x.label!==label);r.unshift({label,i:b.include.join(','),d:b.dish});try{localStorage.setItem('lp_recent',JSON.stringify(r.slice(0,8)))}catch{}};
+  const drawRecent=()=>{const r=recent();let el=$('#recentRow');if(!r.length){el&&el.remove();return}if(!el){el=document.createElement('div');el.id='recentRow';el.className='recent-row no-print';el.setAttribute('aria-label','Recent searches');$('#search').before(el)}el.innerHTML='<span class="muted" style="align-self:center;font-size:.85rem">Recent:</span>'+r.slice(0,5).map((x,k)=>`<button type="button" class="chip" data-k="${k}">${esc(x.label)}</button>`).join('');el.querySelectorAll('button').forEach(b=>b.onclick=()=>{const x=r[+b.dataset.k];tags.inc.length=0;if(x.i)inc.add(x.i);else inc.draw();$('#dish').value=x.d||'';$('#search').requestSubmit()})};
+  const skeleton=res=>{const w=document.createElement('div');w.className='skel-wrap';w.setAttribute('aria-hidden','true');w.innerHTML=[0,1].map(()=>'<div class="skel"><div class="sk img"></div><div class="b"><div class="sk" style="height:26px;width:60%"></div><div class="sk" style="height:14px;width:85%"></div><div class="sk" style="height:14px;width:70%"></div></div></div>').join('');res.appendChild(w)};
   const quota=()=>{$('#quota').textContent=!me?'Sign up for a free 7-day Head Chef trial':me.admin?'Admin · Unlimited':me.tester?'Tester · Full access':me.trial?`Head Chef trial · ${me.trial.daysLeft} day${me.trial.daysLeft===1?'':'s'} left · unlimited`:me.premium?`${me.planName||'Chef de Partie'} · unlimited searches`:`Commis Chef · ${me.searchesLeft} search${me.searchesLeft===1?'':'es'} left`};quota();
   // tag inputs
   const tags={inc:[],exc:[]};
@@ -13,7 +20,7 @@
     const add=v=>{v.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean).forEach(s=>{if(!tags[id].includes(s)&&tags[id].length<20)tags[id].push(s.slice(0,40))});inp.value='';draw()};
     inp.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===','){e.preventDefault();add(inp.value)}else if(e.key==='Backspace'&&!inp.value&&tags[id].length){tags[id].pop();draw()}});
     inp.addEventListener('blur',()=>inp.value&&add(inp.value));box.onclick=e=>{if(e.target===box)inp.focus()};return {add,draw}}
-  const inc=tagBox('inc'),exc=tagBox('exc');
+  const inc=tagBox('inc'),exc=tagBox('exc');loadPrefs();drawRecent();
   $('#time').oninput=e=>$('#timeOut').textContent=e.target.value>=180?'3 hours +':`${e.target.value} min`;
   // wizard
   let step=1;const show=n=>{step=n;document.querySelectorAll('.wiz-step').forEach(s=>s.hidden=+s.dataset.step!==n);document.querySelectorAll('.wiz-prog button').forEach(b=>b.removeAttribute('aria-current'));document.querySelectorAll('.wiz-prog button').forEach(b=>{if(+b.dataset.go===n)b.setAttribute('aria-current','step')});$('#back').hidden=n===1;$('#next').hidden=n===3;const f=document.querySelector(`.wiz-step[data-step="${n}"] input,.wiz-step[data-step="${n}"] textarea`);f&&f.focus({preventScroll:true})};
@@ -25,19 +32,21 @@
     if(!me){$('#authDlg').showModal();return}
     const body={include:tags.inc,exclude:tags.exc,dish:$('#dish').value.trim(),maxMinutes:+$('#time').value,difficulty:document.querySelector('[name=diff]:checked').value,servings:+$('#servings').value||2,cuisine:$('#cuisine').value,diets:[...document.querySelectorAll('#diets input:checked')].map(i=>i.value),kidsMode:$('#kids').checked,...(escNo?{escoffier:escNo}:{})};
     if(!body.include.length&&!body.dish){$('#formErr').textContent='Add at least one ingredient or describe a dish.';show(1);return}
-    const res=$('#results');const stop=LP.cooking(res,$('#go'));
+    savePrefs(body);pushRecent(body);drawRecent();
+    const res=$('#results');res.setAttribute('aria-busy','true');const stop=LP.cooking(res,$('#go'));skeleton(res);
     try{const d=await api('/api/search',{method:'POST',body});me=d.user;quota();stop();res.innerHTML='';
       const h=document.createElement('div');h.className='row no-print';h.style.marginBottom='14px';h.innerHTML=`<p class="muted" style="margin:0">${d.recipes.length} recipe${d.recipes.length===1?'':'s'} · ${d.source==='offline'?'AIchef.food curated library':'Malcolm AI'} <br><small>${esc(d.disclaimer)}</small></p>`;res.appendChild(h);
       if(d.aiBusy){const n=document.createElement('div');n.className='note no-print';n.setAttribute('role','status');n.style.marginBottom='14px';n.innerHTML=`<strong>Malcolm AI is busy right now, so these are picks from our recipe library.</strong> Please try again in a minute for fresh AI recipes.${d.fallbackReason&&me&&me.admin?`<br><small class="muted">Admin · reason: ${esc(d.fallbackReason)}</small>`:''}`;res.appendChild(n)}
       if(d.blessing){const b=document.createElement('div');b.className='card blessing';b.innerHTML=`<p style="margin:0;font-family:var(--serif);font-size:1.15rem;font-style:italic">${esc(d.blessing)}</p>`;res.appendChild(b)}
       if(d.meta&&me&&me.admin){const m=document.createElement('p');m.className='muted no-print';m.style.fontSize='.8rem';m.textContent=`Admin · provider: ${d.meta.provider||'?'} · ${d.meta.model||''}${d.meta.failovers?` · ${d.meta.failovers} failover(s)`:''}`;res.appendChild(m)}
-      if(!d.recipes.length)res.innerHTML+='<div class="card empty"><div class="big">🤔</div><h2>No perfect match</h2><p class="muted">Try fewer filters, more time, or a different dish description.</p></div>';
+      if(!d.recipes.length)res.innerHTML+='<div class="card empty"><div class="big">🤔</div><h2>No perfect match</h2><p class="muted">Try fewer filters, more time, or a different dish description.</p><div class="next"><a class="btn ghost" href="/app.html">Start a new search</a><a class="btn ghost" href="/escoffier.html">Browse Escoffier Classics</a></div></div>';
       d.recipes.forEach((r,i)=>{const el=RecipeView.card(r,{premium:me.premium});if(i===0){const im=el.querySelector('.photo img');if(im){im.loading='eager';im.fetchPriority='high'}}res.appendChild(el)});
       if(d.closing){const c=document.createElement('div');c.className='card blessing';c.innerHTML=`<p style="margin:0;font-family:var(--serif);font-style:italic">${esc(d.closing)}</p>`;res.appendChild(c)}
       if(window.LPMag&&d.recipes.length)LPMag.banner(res).catch(()=>{});
       res.scrollIntoView({behavior:'smooth',block:'start'});
-    }catch(err){stop();res.innerHTML=`<div class="card empty"><div class="big">🍳</div><h2>${esc(err.message)}</h2>${err.data&&err.data.upgrade?'<a class="btn" href="/pricing.html">See plans</a>':''}</div>`}
-    finally{stop()}};
+    }catch(err){stop();const off=!navigator.onLine;res.innerHTML=`<div class="card empty" role="alert"><div class="big">🍳</div><h2>${off?'You seem to be offline':esc(err.message)}</h2><p class="muted">${err.data&&err.data.upgrade?'You have used your free searches. Upgrade for unlimited recipes, or come back to your saved favourites in Account.':'Malcolm could not finish this one. Your choices are kept, so you can try again straight away.'}</p><div class="next">${err.data&&err.data.upgrade?'<a class="btn" href="/pricing.html">See plans</a><a class="btn ghost" href="/account.html">My favourites</a>':'<button type="button" class="btn" id="retry">Try again</button><a class="btn ghost" href="/escoffier.html">Browse Escoffier Classics</a>'}</div></div>`;const rt=$('#retry');if(rt)rt.onclick=()=>$('#search').requestSubmit()}
+    finally{stop();res.removeAttribute('aria-busy')}};
   const q=new URLSearchParams(location.search);if(q.get('i')){inc.add(q.get('i'))}
   if(q.get('dish')){$('#dish').value=q.get('dish').slice(0,200)}if(escNo){const n=document.createElement('p');n.className='muted';n.style.fontSize='.85rem';n.innerHTML=`📖 Modernising Escoffier No. ${esc(escNo)}. Set your time and skill, then press Find my recipes.`;$('#dish').after(n)}
+  if(q.get('go')==='1'&&(q.get('i')||q.get('dish'))){if(me)$('#search').requestSubmit();else $('#authDlg').showModal()}
 })();

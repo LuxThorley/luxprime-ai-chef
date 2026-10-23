@@ -181,7 +181,7 @@ function createApp({ db = open(), stripe } = {}) {
     const row = db.prepare('SELECT recipe_json FROM shares WHERE id=?').get(String(req.params.id).slice(0, 20));
     if (!row) return res.status(404).send(shareTpl().replace('<!--OG-->', '<meta name="robots" content="noindex">'));
     const r = JSON.parse(row.recipe_json); const url = `${APP_URL}/r/${req.params.id}`;
-    const img = r.image && r.image.og && !r.image.generated ? APP_URL + r.image.og : r.image && r.image.generated ? APP_URL + r.image.src : `${APP_URL}/img/hero.jpg`;
+    const img = r.image && r.image.og && !r.image.generated ? APP_URL + r.image.og : r.image && r.image.generated ? APP_URL + r.image.src : `${APP_URL}/img/brand/og.png`;
     const desc = `${r.whyItFits ? '' : ''}${r.cuisine || ''} · ${r.totalMinutes || '?'} min · ${r.difficulty || ''} — an AIchef.food recipe by Malcolm, your AI chef.`;
     const og = [['og:type','article'],['og:site_name','AIchef.food'],['og:title',r.title],['og:description',desc],['og:url',url],['og:image',img]].map(([p,c]) => `<meta property="${p}" content="${escH(c)}">`).join('')
       + [['twitter:card','summary_large_image'],['twitter:title',r.title],['twitter:description',desc],['twitter:image',img]].map(([n,c]) => `<meta name="${n}" content="${escH(c)}">`).join('')

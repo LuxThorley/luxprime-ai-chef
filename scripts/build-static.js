@@ -30,7 +30,7 @@ for (const f of walk(OUT).filter(f => /\.(html|js|css)$/.test(f) && !f.includes(
     s = s.replace('<script src="js/common.js"></script>', '<script src="js/common.js"></script><script src="js/engine.js"></script><script src="js/static-api.js"></script>');
     s = s.replace(/content="img\//g, `content="${SITE}img/`);
     if (!/og:url/.test(s)) s = s.replace('</title>', `</title><meta property="og:url" content="${SITE}${base === 'index.html' ? '' : base}">`);
-    if (/og:image/.test(s) === false) s = s.replace('</title>', `</title><meta property="og:title" content="AIchef.food"><meta property="og:image" content="${SITE}img/hero.jpg"><meta name="twitter:card" content="summary_large_image">`);
+    if (/og:image/.test(s) === false) s = s.replace('</title>', `</title><meta property="og:title" content="AIchef.food"><meta property="og:image" content="${SITE}img/brand/og.png"><meta name="twitter:card" content="summary_large_image">`);
   }
   if (base === 'pricing.html') s = s.replace('<div id="checkout-msg"', '<p class="note"><strong>Coming soon – full service.</strong> Subscriptions open when the full AIchef.food server launches. No payments are taken on this preview.</p><div id="checkout-msg"');
   if (base === 'account.html') s = s.replace(/<main id="main">[\s\S]*<\/main>/, '<main id="main"><section><div class="wrap"><div class="card empty" style="text-align:center;padding:44px"><div class="big">👨‍🍳</div><h2>Accounts — coming soon</h2><p class="muted">Sign-in, favourites, history and subscriptions arrive with the full AIchef.food service powered by Malcolm AI. Meanwhile the AI Chef preview is free to use.</p><a class="btn" href="app.html">Open the AI Chef</a></div></div></section></main>').replace(/<script src="js\/account\.js"><\/script>/, '');

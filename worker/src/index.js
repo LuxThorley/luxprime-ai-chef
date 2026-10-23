@@ -267,7 +267,7 @@ app.get('/r/:id', async c => {
   const id = c.req.param('id').slice(0, 20); const row = await db(c).prepare('SELECT recipe_json FROM shares WHERE id=?').bind(id).first();
   if (!row) return c.html(tpl.replace('<!--OG-->', '<meta name="robots" content="noindex">'), 404);
   const r = JSON.parse(row.recipe_json); const base = appUrl(c); const url = `${base}/r/${id}`;
-  const img = r.image && r.image.og ? base + r.image.og : `${base}/img/hero.jpg`;
+  const img = r.image && r.image.og ? base + r.image.og : `${base}/img/brand/og.png`;
   const desc = `${r.cuisine || ''} · ${r.totalMinutes || '?'} min · ${r.difficulty || ''} — an AIchef.food recipe by Malcolm, your AI chef.`;
   const og = [['og:type','article'],['og:site_name','AIchef.food'],['og:title',r.title],['og:description',desc],['og:url',url],['og:image',img]].map(([p, v]) => `<meta property="${p}" content="${escH(v)}">`).join('')
     + [['twitter:card','summary_large_image'],['twitter:title',r.title],['twitter:description',desc],['twitter:image',img]].map(([n, v]) => `<meta name="${n}" content="${escH(v)}">`).join('') + `<link rel="canonical" href="${escH(url)}">`;

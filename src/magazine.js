@@ -124,7 +124,7 @@ const PW = 595.28, PH = 841.89, M = 48;
 function render(data, imgs, fontFiles) {
   const { profile: p, recipes, shop, escoffierNote, issueNo, manageUrl } = data;
   const doc = new Doc({ title: `AIchef.food Magazine — ${p.month} ${p.year} — for ${p.name}`, fontFiles });
-  const hero = imgs.hero ? doc.addJpeg(imgs.hero) : null; const dish = recipes.map((_, i) => imgs.dishes[i] ? doc.addJpeg(imgs.dishes[i]) : hero);
+  const hero = imgs.hero ? doc.addJpeg(imgs.hero) : null; const mark = imgs.mark ? doc.addJpeg(imgs.mark) : null; const dish = recipes.map((_, i) => imgs.dishes[i] ? doc.addJpeg(imgs.dishes[i]) : hero);
   const folio = (pg, n, dark) => { pg.line(M, PH - 40, PW - M, PH - 40, dark ? '#3a3a3a' : C.rule, 0.5); pg.text('AICHEF.FOOD MAGAZINE', M, PH - 27, { font: 'sansB', size: 6.5, spacing: 1.6, color: dark ? C.gold : C.mute }); pg.text(`${p.month.toUpperCase()} ${p.year}  ·  ${n}`, PW - M, PH - 27, { font: 'sans', size: 6.5, spacing: 1.2, color: dark ? C.gold : C.mute, align: 'right' }); };
   const label = (pg, s, x, y, color = C.copper) => pg.text(s.toUpperCase(), x, y, { font: 'sansB', size: 7, spacing: 1.8, color });
 
@@ -133,7 +133,7 @@ function render(data, imgs, fontFiles) {
   if (hero) pg.image(hero, 0, 0, PW, PH);
   pg.rect(0, 0, PW, 200, C.ink, { alpha: 0.8 }); pg.line(0, 200, PW, 200, C.gold, 0.8, 0.9);
   pg.rect(0, PH - 330, PW, 330, C.ink, { alpha: 0.86 }); pg.line(0, PH - 330, PW, PH - 330, C.gold, 0.8, 0.9);
-  pg.text('AICHEF.FOOD', PW / 2, 58, { font: 'sansB', size: 10, spacing: 6, color: C.gold2, align: 'center' });
+  if (mark) { pg.image(mark, PW / 2 - 92, 40, 26, 26); pg.text('AICHEF.FOOD', PW / 2 + 14, 58, { font: 'sansB', size: 10, spacing: 6, color: C.gold2, align: 'center' }); } else pg.text('AICHEF.FOOD', PW / 2, 58, { font: 'sansB', size: 10, spacing: 6, color: C.gold2, align: 'center' });
   pg.line(PW / 2 - 140, 72, PW / 2 + 140, 72, C.gold, 0.6);
   pg.text('Magazine', PW / 2, 138, { font: 'serifI', size: 74, color: C.ivory, align: 'center' }); pg.text('THE LUX PRIME KITCHEN EDITION', PW / 2, 188, { font: 'sansB', size: 6.5, spacing: 2.4, color: C.gold, align: 'center' });
   pg.text(`${p.month.toUpperCase()} ${p.year}   ·   ISSUE ${String(issueNo).toUpperCase()}`, PW / 2, 170, { font: 'sans', size: 8, spacing: 3, color: C.gold2, align: 'center' });

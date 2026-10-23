@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 120" role="img" aria-label="AIchef.food — Ask Malcolm, your AI chef">
+<image href="mark.svg" x="0" y="8" width="104" height="104"/>
+<g transform="translate(124 0)">
+<path d="M4 82L30 18h14l26 64H55l-5.5-14H24.5L19 82zM29 56h16l-8-21z" fill="#d7262e"/>
+<path d="M76 18h30v11h-8v42h8v11H76V71h8V29h-8z" fill="#d7262e"/>
+<text x="114" y="82" font-family="Fraunces,Georgia,serif" font-style="italic" font-weight="500" font-size="68" fill="#1b1020">chef<tspan font-style="normal" font-weight="700" fill="#2f8f4b">.food</tspan></text>
+<text x="4" y="108" font-family="Inter,Arial,sans-serif" font-weight="600" font-size="13" letter-spacing="4" fill="#b8650f">ASK MALCOLM, YOUR AI CHEF</text>
+</g></svg>
