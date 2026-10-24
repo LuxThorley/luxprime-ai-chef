@@ -99,10 +99,10 @@ function parseMenuText(text) {
   return { sections: out, dishCount: out.reduce((a, s) => a + s.dishes.length, 0) };
 }
 // Minimal PDF text extraction (Flate or raw streams; Tj/TJ strings). Works for most text-based menus; scanned/CID-encoded PDFs need an image or text upload.
-async function pdfText(bytes, inflate) {
+async function pdfText(bytes, inflate, cap = 60000) {
   const s = new TextDecoder('latin1').decode(bytes); const out = [];
   const re = /<<([^]*?)>>\s*stream\r?\n/g; let m;
-  while ((m = re.exec(s)) && out.join('').length < 60000) {
+  let total = 0; while ((m = re.exec(s)) && total < cap) { total = out.reduce((a, l) => a + l.length, 0);
     const start = m.index + m[0].length; const end = s.indexOf('endstream', start); if (end < 0) break;
     let data = bytes.subarray(start, end); const dict = m[1];
     if (/\/Subtype\s*\/Image|\/FontFile|\/Length1/.test(dict)) continue;
@@ -125,7 +125,7 @@ const CUISINE_WORDS = { Italian: /\b(pasta|risotto|antipasti|trattoria|osteria|p
   Indian: /\b(curry|tandoor|masala|biryani|dal|naan|tikka|paneer)\b/i, Japanese: /\b(sushi|sashimi|ramen|izakaya|yakitori|miso|tempura|omakase)\b/i, Chinese: /\b(dim sum|szechuan|sichuan|cantonese|bao|wok|peking)\b/i, Thai: /\b(pad thai|green curry|tom yum|som tam|thai)\b/i,
   Mexican: /\b(taco|tacos|burrito|mezcal|quesadilla|mole|tortilla)\b/i, Spanish: /\b(tapas|paella|jamón|chorizo|patatas bravas|croquetas)\b/i, 'Middle Eastern': /\b(mezze|meze|hummus|shawarma|falafel|labneh|za'atar)\b/i, Greek: /\b(souvlaki|moussaka|taverna|spanakopita|tzatziki)\b/i, Mediterranean: /\b(mediterranean|grilled octopus|olive oil|mezze)\b/i, Medicinal: /\b(apothecary|herbal|botanical|wellness|dioscorides)\b/i };
 const STYLE_WORDS = [['fine dining', /\b(tasting menu|michelin|fine dining|degustation|amuse|chef'?s table)\b/i], ['casual', /\b(casual|relaxed|neighbourhood|family[- ]friendly|walk[- ]ins)\b/i], ['gastropub', /\b(gastro ?pub|pub|ales?)\b/i], ['seasonal / farm-to-table', /\b(seasonal|local(ly)? sourced|farm|foraged|kitchen garden)\b/i], ['plant-forward', /\b(vegan|plant[- ]based|vegetarian)\b/i], ['seafood-led', /\b(oyster|seafood|fish market|catch of the day)\b/i]];
-function heuristicAnalysis(site, parsed) {
+function heuristicAnalysis(site, parsed, kind = 'mine') {
   const blob = [site.title, site.description, site.headings.join(' '), site.text.slice(0, 15000)].join(' ');
   const scores = Object.entries(CUISINE_WORDS).map(([c, re]) => [c, (blob.match(new RegExp(re.source, 'gi')) || []).length]).filter(x => x[1]).sort((a, b) => b[1] - a[1]);
   const cuisines = [...new Set([...site.cuisines, ...scores.slice(0, 3).map(x => x[0])])].slice(0, 4);
@@ -143,26 +143,59 @@ function heuristicAnalysis(site, parsed) {
   const c0 = cuisines[0] || 'Modern British';
   const ideas = [`A ${c0} tasting menu of five courses that tells the restaurant’s story, with an optional wine flight.`, `A seasonal ${new Date().toLocaleString('en-GB', { month: 'long' })} special built around one hero British ingredient at its peak.`,
     `A plant-forward ${c0} main with the same craft and price point as the signature meat dish.`, `A Dioscorides-inspired “apothecary” dessert or digestif course (fennel, honey, mint) — historical food lore as a talking point.`, `A weekday set lunch (2 or 3 courses) to fill quieter covers.`];
-  return { name: site.siteName || site.title.split(/[|–—-]/)[0].trim(), cuisines, style: style.length ? style : ['modern'], priceBand, menuSections: parsed.sections.map(s => `${s.name} (${s.dishes.length})`), dishCount: parsed.dishCount,
+  if (kind === 'benchmark') { gaps.splice(0, gaps.length, ...gaps.map(g => 'Benchmark: ' + g.replace(/ — .*$/, '') + ' — a chance for you to differentiate.')); ideas.splice(0, ideas.length, `Take inspiration from this benchmark’s ${c0} positioning and create an original signature dish that answers it.`, `Where this benchmark is ${style[0] || 'conventional'}, differentiate with a clearly seasonal, story-led menu.`, `Offer something it doesn’t: a plant-forward tasting option or a Dioscorides-inspired botanical course.`, `Compare price points (${priceBand}) and design a set lunch that out-values it.`); }
+  return { kind, name: site.siteName || site.title.split(/[|–—-]/)[0].trim(), cuisines, style: style.length ? style : ['modern'], priceBand, menuSections: parsed.sections.map(s => `${s.name} (${s.dishes.length})`), dishCount: parsed.dishCount,
     summary: `${site.siteName || 'The restaurant'} reads as a ${style[0] || 'modern'} ${cuisines.join(' / ') || 'contemporary'} restaurant${priceBand !== 'unknown' ? ` at a ${priceBand} price point` : ''}${parsed.dishCount ? `, with ${parsed.dishCount} dishes across ${parsed.sections.length} menu sections` : ''}.`,
     strengths: [site.description && `Clear positioning: “${site.description.slice(0, 160)}”`, parsed.dishCount && `${parsed.dishCount} dishes found and parsed from the site`, cuisines.length && `Distinct identity: ${cuisines.join(', ')}`].filter(Boolean), gaps, ideas, source: 'heuristic' };
 }
-function analysisMessages(site, parsed, persona) {
+function analysisMessages(site, parsed, persona, { kind = 'mine', mine = null } = {}) {
   const menu = parsed.sections.map(s => `${s.name}: ${s.dishes.slice(0, 12).map(d => d.name + (d.price ? ` (£${d.price})` : '')).join('; ')}`).join('\n').slice(0, 5000);
-  return [{ role: 'system', content: `${persona}\nYou are reviewing a restaurant for its owner/executive chef. Be specific, commercially savvy and constructive. Reply with JSON only: {"summary":string,"cuisines":[string],"style":[string],"priceBand":string,"strengths":[string],"gaps":[string],"ideas":[string]} — 3-5 items per list; ideas are concrete new dishes or menu concepts that suit this restaurant.` },
+  return [{ role: 'system', content: `${persona}\nYou are reviewing a restaurant for its owner/executive chef. Be specific, commercially savvy and constructive. Reply with JSON only: {"summary":string,"cuisines":[string],"style":[string],"priceBand":string,"strengths":[string],"gaps":[string],"ideas":[string]} — 3-5 items per list; ideas are concrete new dishes or menu concepts that suit this restaurant.${kind === 'benchmark' ? ' This site is a BENCHMARK (a competitor or inspiration), not the member’s restaurant: treat it as comparison only — in gaps, note where the member can differentiate; in ideas, propose original dishes inspired by (never copied from) it. Never reproduce its dish names or descriptions verbatim.' + (mine ? ` The member’s own restaurant: ${String(mine).slice(0, 400)}` : '') : ''}` },
     { role: 'user', content: `Website: ${site.url}\nTitle: ${site.title}\nDescription: ${site.description}\nHeadings: ${site.headings.slice(0, 15).join(' | ')}\nDeclared cuisine: ${site.cuisines.join(', ')}\nMenu found:\n${menu || '(no menu parsed)'}\nPage text (excerpt):\n${site.text.slice(0, 3500)}` }];
 }
 function jsonFrom(raw) { const s = String(raw || ''); const a = s.indexOf('{'), b = s.lastIndexOf('}'); if (a < 0 || b <= a) return null; try { return JSON.parse(s.slice(a, b + 1)); } catch { return null; } }
 const strList = (v, n = 6, len = 300) => (Array.isArray(v) ? v : []).map(x => String(typeof x === 'string' ? x : (x && (x.name || x.title || x.idea)) || '').trim().slice(0, len)).filter(Boolean).slice(0, n);
-async function analyse(site, parsed, { llm, persona = '' } = {}) {
-  const h = heuristicAnalysis(site, parsed);
+async function analyse(site, parsed, { llm, persona = '', kind = 'mine', mine = null } = {}) {
+  const h = heuristicAnalysis(site, parsed, kind);
   if (!llm) return h;
   try {
-    const j = jsonFrom(await llm(analysisMessages(site, parsed, persona), { maxTokens: 900 }));
+    const j = jsonFrom(await llm(analysisMessages(site, parsed, persona, { kind, mine }), { maxTokens: 900 }));
     if (!j || !j.summary) return h;
     return { ...h, summary: String(j.summary).slice(0, 700), cuisines: strList(j.cuisines, 4, 40).length ? strList(j.cuisines, 4, 40) : h.cuisines, style: strList(j.style, 4, 60).length ? strList(j.style, 4, 60) : h.style,
       priceBand: String(j.priceBand || h.priceBand).slice(0, 60), strengths: strList(j.strengths).length ? strList(j.strengths) : h.strengths, gaps: strList(j.gaps).length ? strList(j.gaps) : h.gaps, ideas: strList(j.ideas).length ? strList(j.ideas) : h.ideas, source: 'malcolm' };
   } catch { return h; }
+}
+
+// ---------- Cookbook benchmarks (private reference; style only, never reproduced) ----------
+const TECHNIQUES = ['braise', 'confit', 'cure', 'ferment', 'pickle', 'smoke', 'roast', 'poach', 'sous vide', 'grill', 'char', 'emulsify', 'reduce', 'glaze', 'brine', 'laminate', 'temper', 'infuse', 'sear', 'steam', 'stew', 'bake', 'fry', 'dehydrate', 'foam', 'gel', 'purée', 'velouté', 'beurre blanc', 'stock'];
+const FLAVOURS = ['lemon', 'garlic', 'thyme', 'rosemary', 'sage', 'tarragon', 'chilli', 'ginger', 'miso', 'soy', 'honey', 'butter', 'anchovy', 'capers', 'fennel', 'apple', 'pear', 'chocolate', 'hazelnut', 'almond', 'saffron', 'cumin', 'coriander', 'mint', 'basil', 'tomato', 'mushroom', 'truffle', 'vanilla', 'orange', 'rhubarb', 'cream', 'yoghurt', 'parmesan', 'olive oil', 'smoked paprika', 'lime', 'sesame', 'dill', 'mustard'];
+function cookbookHeuristic(text, title) {
+  const t = String(text || '').toLowerCase(); const count = w => (t.match(new RegExp('\\b' + w.replace(/ /g, '\\s+') + '\\w*', 'g')) || []).length;
+  const techniques = TECHNIQUES.map(w => [w, count(w)]).filter(x => x[1] > 1).sort((a, b) => b[1] - a[1]).slice(0, 8).map(x => x[0]);
+  const paras = t.split(/\n{2,}|\.\s/).slice(0, 4000); const pc = new Map(); const top = FLAVOURS.filter(f => count(f) > 1);
+  for (const pa of paras) { const hit = top.filter(f => pa.includes(f)); for (let i = 0; i < hit.length; i++) for (let j = i + 1; j < hit.length; j++) { const k = hit[i] + ' & ' + hit[j]; pc.set(k, (pc.get(k) || 0) + 1); } }
+  const pairings = [...pc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(x => x[0]);
+  const sections = String(text || '').split('\n').filter(l => SECTION.test(l.trim())).map(l => l.trim()).slice(0, 10);
+  const cz = Object.entries(CUISINE_WORDS).map(([c, re]) => [c, (t.match(new RegExp(re.source, 'gi')) || []).length]).filter(x => x[1] > 2).sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]);
+  return { kind: 'cookbook', title: title || 'Cookbook', cuisines: cz, techniques, pairings, structure: [...new Set(sections)].slice(0, 8), themes: [cz[0] && `${cz[0]} cooking`, techniques[0] && `technique-led (${techniques.slice(0, 3).join(', ')})`].filter(Boolean),
+    summary: `${title || 'This cookbook'} leans on ${techniques.slice(0, 3).join(', ') || 'classic techniques'}${pairings.length ? `, with signature pairings such as ${pairings.slice(0, 3).join('; ')}` : ''}.`, ideas: [], strengths: [], gaps: [], style: [], priceBand: 'n/a', source: 'heuristic' };
+}
+async function analyseCookbook(text, title, { llm, persona = '' } = {}) {
+  const h = cookbookHeuristic(text, title); if (!llm) return h;
+  const s = String(text || ''); const n = s.length; const sample = [0, 0.25, 0.5, 0.75].map(f => s.slice(Math.floor(n * f), Math.floor(n * f) + 1500)).join('\n…\n');
+  try {
+    const j = jsonFrom(await llm([{ role: 'system', content: `${persona}\nYou are studying a cookbook the member has the right to use for private reference. Extract ONLY transferable style: techniques, flavour pairings, menu/book structure, themes and philosophy. Do NOT reproduce any recipe, ingredient list, method or sentence from it. Reply with JSON only: {"summary":string (your own words, max 60 words),"cuisines":[string],"techniques":[string],"pairings":[string],"structure":[string],"themes":[string],"ideas":[string] (original dish ideas inspired by its style)}` },
+      { role: 'user', content: `Cookbook: ${title}\nExcerpts (for analysis only):\n${sample}` }], { maxTokens: 900 }));
+    if (!j || !j.summary) return h;
+    return { ...h, summary: String(j.summary).slice(0, 500), cuisines: strList(j.cuisines, 4, 40).length ? strList(j.cuisines, 4, 40) : h.cuisines, techniques: strList(j.techniques, 10, 60).length ? strList(j.techniques, 10, 60) : h.techniques,
+      pairings: strList(j.pairings, 10, 80).length ? strList(j.pairings, 10, 80) : h.pairings, structure: strList(j.structure, 8, 80), themes: strList(j.themes, 6, 120), ideas: strList(j.ideas, 6, 200), source: 'malcolm' };
+  } catch { return h; }
+}
+const cookbookBrief = a => `“${a.title}” (style only: techniques ${(a.techniques || []).slice(0, 5).join(', ') || 'n/a'}; pairings ${(a.pairings || []).slice(0, 4).join('; ') || 'n/a'}; themes ${(a.themes || []).slice(0, 3).join('; ') || 'n/a'})`;
+// Long verbatim runs (8+ consecutive words) from a private cookbook must never appear in output.
+function verbatimRisk(out, sourceText, n = 8) {
+  const norm = x => String(x || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean); const src = ' ' + norm(sourceText).join(' ') + ' '; const w = norm(out);
+  for (let i = 0; i + n <= w.length; i++) if (src.includes(' ' + w.slice(i, i + n).join(' ') + ' ')) return true; return false;
 }
 
 // ---------- Smart search over account history / favourites ----------
@@ -214,7 +247,7 @@ const MenuSpec = z.object({
   name: z.string().trim().max(80).default(''), restaurantName: z.string().trim().max(80).default(''), description: z.string().trim().max(1500).default(''),
   menuType: z.enum(Object.keys(MENU_TYPES)).default('a-la-carte'), cuisines: z.array(z.string().trim().min(1).max(40)).max(6).default([]), style: z.string().trim().max(120).default(''),
   courses: z.coerce.number().int().min(1).max(12).default(3), dishesPerCourse: z.coerce.number().int().min(1).max(8).default(3), courseNames: z.array(z.string().trim().max(40)).max(12).default([]),
-  pinned: z.array(z.string().trim().min(1).max(140)).max(40).default([]), sourceMenu: z.string().max(12000).default(''),
+  pinned: z.array(z.string().trim().min(1).max(140)).max(40).default([]), sourceMenu: z.string().max(12000).default(''), sourceKind: z.enum(['mine', 'benchmark']).default('mine'), useCookbooks: z.boolean().default(true),
   refine: z.object({ appeal: z.enum(['broad', 'adventurous', 'classic', 'family']).default('broad'), variety: z.enum(['balanced', 'high', 'focused']).default('balanced'), taste: z.enum(['balanced', 'rich', 'fresh', 'spicy', 'umami']).default('balanced'),
     diets: z.array(z.enum(DIET_TAGS)).max(6).default([]), season: z.enum(['now', 'spring', 'summer', 'autumn', 'winter', 'any']).default('now'), cost: z.enum(['any', 'budget', 'mid', 'premium']).default('any'),
     prices: z.boolean().default(true), pairings: z.boolean().default(false), personal: z.string().trim().max(400).default('') }).default({})
@@ -231,8 +264,9 @@ function builderMessages(spec, ctx, persona) {
       r.prices ? `Suggest GBP menu prices suited to ${ctx.priceBand || 'the restaurant'}${spec.menuType === 'tasting' || spec.menuType === 'set' || spec.menuType === 'prix-fixe' ? ' (put the per-person price in chefNote and use null for dish prices)' : ''}.` : 'No prices (null).', r.pairings && 'Add a wine or drink pairing per dish (style/grape/region, no brands).',
       spec.cuisines.some(c => /medicinal/i.test(c)) && `Medicinal cuisine: draw on Dioscorides’ recipe-safe foods (${dioscorides.SAFE.slice(0, 30).map(e => e.name).join(', ')}).`,
       spec.pinned.length && `Must feature (refine and elevate) these dishes from the chef’s account history: ${spec.pinned.join('; ')}. Mark them fromHistory true.`,
+      ctx.cookbooks && ctx.cookbooks.length && `Cookbook inspiration — borrow style, techniques, pairings and structure only; every dish must be original; never reproduce recipes, dish names or text from these books: ${ctx.cookbooks.map(cookbookBrief).join(' | ')}.`,
       ctx.analysis && `Website analysis: ${ctx.analysis.summary} Ideas: ${(ctx.analysis.ideas || []).slice(0, 3).join(' / ')}`,
-      spec.sourceMenu && `Existing/example menu to explore, develop and elaborate on (keep its identity, raise its ambition):\n${spec.sourceMenu.slice(0, 4000)}`, r.personal && `Personal brief: ${r.personal}`].filter(Boolean).join('\n') }];
+      spec.sourceMenu && (spec.sourceKind === 'benchmark' ? `Benchmark menu (a competitor or inspiration, NOT the client’s): use it only for inspiration and contrast — create original dishes, never reuse its dish names or descriptions verbatim:\n${spec.sourceMenu.slice(0, 4000)}` : `Existing/example menu to explore, develop and elaborate on (keep its identity, raise its ambition):\n${spec.sourceMenu.slice(0, 4000)}`), r.personal && `Personal brief: ${r.personal}`].filter(Boolean).join('\n') }];
 }
 // Offline composer: deterministic, uses history + library + course-appropriate templates.
 const TPL = {
@@ -273,7 +307,13 @@ function normaliseMenu(j, spec) {
 async function buildMenu(spec, ctx = {}, { llm, persona = '' } = {}) {
   let menu = null;
   if (llm) { try { menu = normaliseMenu(jsonFrom(await llm(builderMessages(spec, ctx, persona), { maxTokens: 1800 })), spec); } catch {} }
+  if (menu && spec.sourceKind === 'benchmark' && spec.sourceMenu) { // never copy a benchmark's dishes verbatim
+    const theirs = new Set(menuDishes(spec.sourceMenu).map(n => n.toLowerCase().replace(/[^a-z ]/g, '').trim()));
+    menu.courses = menu.courses.map(c => ({ ...c, dishes: c.dishes.filter(d => !theirs.has(d.name.toLowerCase().replace(/[^a-z ]/g, '').trim())) })).filter(c => c.dishes.length); if (!menu.courses.length) menu = null; }
+  if (menu && ctx.cookbookText) menu.courses = menu.courses.map(c => ({ ...c, dishes: c.dishes.filter(d => !verbatimRisk(d.name + ' ' + d.description, ctx.cookbookText)) })).filter(c => c.dishes.length);
+  if (menu && !menu.courses.length) menu = null;
   menu = menu || offlineMenu(spec, ctx);
+  if (ctx.cookbooks && ctx.cookbooks.length) menu.inspiredBy = ctx.cookbooks.map(b => b.title).slice(0, 4);
   return { ...menu, restaurantName: spec.restaurantName, menuType: spec.menuType, menuTypeLabel: MENU_TYPES[spec.menuType], cuisines: spec.cuisines, diets: spec.refine.diets, description: spec.description, createdAt: new Date().toISOString() };
 }
 
@@ -313,22 +353,34 @@ function menuPdf(menu, fontFiles, { url = '' } = {}) {
       y += 8;
     }
   }
+  if (menu.inspiredBy && menu.inspiredBy.length) { if (y + 30 > bottom) newPage(); y += 14; pg.text(`Inspired by the style of ${menu.inspiredBy.map(t => '“' + t + '”').join(', ')} · original dishes`, W / 2, y, { font: 'serifI', size: 9, color: PC.mute, align: 'center', maxW: CW }); y += 8; }
   if (menu.chefNote) { if (y + 40 > bottom) newPage(); y += 10; pg.line(M + 120, y, W - M - 120, y, PC.rule, 0.5); y = pg.para(menu.chefNote, M + 40, y + 20, CW - 80, { font: 'serifI', size: 12, lead: 1.35, color: PC.ink, align: 'center', maxLines: 3 }); }
   pages.forEach((p, i) => footer(p, i + 1, pages.length));
   return doc.save();
 }
 // Restauranteur "use my restaurant in searches": a compact culinary context blended into general recipe searches.
+const menuDishes = txt => String(txt || '').split('\n').filter(l => l && !/^[A-Z][\w &'-]{0,30}$/.test(l)).map(l => l.split(/ £| — /)[0].trim()).filter(Boolean);
+// Linked sources: [{ id, kind: 'mine'|'benchmark', name, url, analysis, websiteMenu, useInSearch }]. Legacy single-URL profiles count as one 'mine' source.
+function sourcesOf(profile) {
+  if (!profile) return []; if (Array.isArray(profile.sources)) return profile.sources;
+  return profile.url || profile.analysis || profile.websiteMenu ? [{ id: 'main', kind: 'mine', name: profile.name || '', url: profile.url || '', analysis: profile.analysis || null, websiteMenu: profile.websiteMenu || '', useInSearch: true }] : [];
+}
 function searchContext(profile) {
-  if (!profile || !profile.useInSearch) return null; const a = profile.analysis || {};
-  const dishes = String(profile.websiteMenu || '').split('\n').filter(l => l && !/^[A-Z][\w &'-]{0,30}$/.test(l)).map(l => l.split(/ £| — /)[0].trim()).filter(Boolean).slice(0, 12);
-  const parts = [a.cuisines && a.cuisines.length && `cuisine ${a.cuisines.join(', ')}`, a.style && a.style.length && `style ${a.style.join(', ')}`, (a.priceBand || profile.priceBand) && `price point ${a.priceBand || profile.priceBand}`,
-    profile.description && `concept: ${String(profile.description).slice(0, 300)}`, dishes.length && `current menu includes ${dishes.join('; ')}`].filter(Boolean);
-  if (!parts.length) return null;
-  return { name: profile.name || 'your restaurant', cuisines: (a.cuisines || []).slice(0, 3), text: `Restaurant context (${profile.name || 'the cook’s restaurant'}) — make the recipes suit this kitchen and could sit on its menu: ${parts.join('; ')}.`.slice(0, 900) };
+  if (!profile || !profile.useInSearch) return null;
+  const chosen = sourcesOf(profile).filter(s => s.useInSearch !== false); const mineSrc = chosen.filter(s => s.kind === 'mine' || !s.kind); const bench = chosen.filter(s => s.kind === 'benchmark'); const books = chosen.filter(s => s.kind === 'cookbook' && s.analysis);
+  const describe = s => { const a = s.analysis || {}; return [a.cuisines && a.cuisines.length && `cuisine ${a.cuisines.join(', ')}`, a.style && a.style.length && `style ${a.style.join(', ')}`, a.priceBand && a.priceBand !== 'unknown' && `price point ${a.priceBand}`].filter(Boolean); };
+  const mineParts = [...mineSrc.flatMap(describe), profile.description && `concept: ${String(profile.description).slice(0, 300)}`, ...mineSrc.map(s => menuDishes(s.websiteMenu).slice(0, 10)).filter(d => d.length).map(d => `current menu includes ${d.join('; ')}`)].filter(Boolean);
+  const benchParts = bench.map(s => { const d = describe(s); const dishes = menuDishes(s.websiteMenu).slice(0, 6); return (d.length || dishes.length) ? `${s.name || 'a benchmark'} (${[...d, dishes.length && `known for dishes like ${dishes.join('; ')}`].filter(Boolean).join('; ')})` : null; }).filter(Boolean);
+  if (!mineParts.length && !benchParts.length && !books.length) return null;
+  const text = [mineParts.length && `Restaurant context (${profile.name || 'the cook’s restaurant'}) — make the recipes suit this kitchen and fit its menu: ${mineParts.join('; ')}.`,
+    benchParts.length && `Benchmarks for inspiration and contrast only (do not copy their dishes; create original ideas that compete with or differentiate from them): ${benchParts.join(' | ')}.`, books.length && `Cookbook inspiration (style only, never reproduce its recipes or text): ${books.map(b => cookbookBrief({ ...b.analysis, title: b.name || b.analysis.title })).join(' | ')}.`].filter(Boolean).join(' ').slice(0, 1400);
+  const cz = [...mineSrc, ...bench].flatMap(s => (s.analysis && s.analysis.cuisines) || []);
+  const names = [mineSrc.length && (profile.name || 'your restaurant'), ...bench.map(s => s.name || 'a benchmark'), ...books.map(s => `“${s.name || 'cookbook'}”`)].filter(Boolean);
+  return { name: names.slice(0, 4).join(', '), sources: names, inspiredBy: books.map(s => s.name || s.analysis.title), cuisines: [...new Set(cz)].slice(0, 3), text };
 }
 function applySearchContext(q, ctx) {
   if (!ctx) return q; const out = { ...q, dish: [q.dish, ctx.text].filter(Boolean).join('\n').slice(0, 1900), restaurantContext: ctx.name };
   if ((!q.cuisines || !q.cuisines.length) && ctx.cuisines.length) { out.cuisines = ctx.cuisines.slice(0, 1); out.cuisine = ctx.cuisines[0]; }
   return out;
 }
-module.exports = { searchContext, applySearchContext, checkUrl, safeFetch, readCapped, extractSite, htmlToText, parseMenuText, pdfText, heuristicAnalysis, analyse, historyItems, smartSearch, SearchOpts, MenuSpec, MENU_TYPES, DIET_TAGS, courseNames, builderMessages, offlineMenu, normaliseMenu, buildMenu, menuPdf, seasonNow, jsonFrom, MAX_BYTES };
+module.exports = { cookbookHeuristic, analyseCookbook, verbatimRisk, sourcesOf, menuDishes, searchContext, applySearchContext, checkUrl, safeFetch, readCapped, extractSite, htmlToText, parseMenuText, pdfText, heuristicAnalysis, analyse, historyItems, smartSearch, SearchOpts, MenuSpec, MENU_TYPES, DIET_TAGS, courseNames, builderMessages, offlineMenu, normaliseMenu, buildMenu, menuPdf, seasonNow, jsonFrom, MAX_BYTES };

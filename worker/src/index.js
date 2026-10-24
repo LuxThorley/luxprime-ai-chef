@@ -186,7 +186,7 @@ async function doSearch(c, u, data) {
   const q = { ...data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: data.difficulty === 'any' ? null : data.difficulty, limit: prem ? 5 : pl.free.results };
   const brief = briefMod.without(briefMod.parseBrief(data.dish), data.briefIgnore); Object.assign(q, briefMod.applyHints(q, brief)); q.brief = { raw: brief.raw, constraints: Object.fromEntries(Object.entries(brief.hints).map(([k, v]) => [k, v.value])), question: brief.question };
   let restoUsed = null; // Restauranteur: blend the linked restaurant profile when the member's toggle is on (default off)
-  if (plansMod.isRestaurateur(u) && c.env.IMAGES) { try { const prof = await kvJ(c, RK.profile(u)); const want = data.useRestaurant ?? !!(prof && prof.useInSearch); const ctx = want ? restaurant.searchContext({ ...prof, useInSearch: true }) : null; if (ctx) { Object.assign(q, restaurant.applySearchContext(q, ctx)); restoUsed = ctx.name; } } catch (e) { console.error('resto ctx', e && e.message); } }
+  if (plansMod.isRestaurateur(u) && c.env.IMAGES) { try { const prof = await kvJ(c, RK.profile(u)); const want = data.useRestaurant ?? !!(prof && prof.useInSearch); const ctx = want && prof ? restaurant.searchContext({ ...prof, useInSearch: true }) : null; if (ctx) { Object.assign(q, restaurant.applySearchContext(q, ctx)); restoUsed = ctx.name; } } catch (e) { console.error('resto ctx', e && e.message); } }
   const cl = data.skipClarify ? null : chat.clarify(q); if (cl) return [200, { clarify: cl, recipes: [], inspirationMode: q.inspirationMode, understood: [], user: publicUser(u) }];
   try { q.inspiration = await community.inspiration(cq(c), u.id); } catch {}
   // Same-account workers.dev subrequests are blocked, so reach the Malcolm worker through its service binding.
@@ -413,7 +413,7 @@ app.post('/m/unsubscribe', async c => { // also the RFC 8058 one-click target
 const needResto = async (c, next) => plansMod.isRestaurateur(c.get('user')) ? next() : c.json({ error: 'The Menu Builder and restaurant tools come with the Restauranteur plan', upgrade: '/pricing.html#restaurant' }, 402);
 const kvJ = async (c, k) => { const v = await c.env.IMAGES.get(k); try { return v ? JSON.parse(v) : null; } catch { return null; } };
 const kvPut = (c, k, v) => c.env.IMAGES.put(k, JSON.stringify(v));
-const RK = { profile: u => `rest/${u.id}/profile`, index: u => `rest/${u.id}/menus`, menu: id => `rest/menu/${id}`, share: t => `rest/share/${t}` };
+const RK = { profile: u => `rest/${u.id}/profile`, index: u => `rest/${u.id}/menus`, menu: id => `rest/menu/${id}`, share: t => `rest/share/${t}`, book: (u, id) => `rest/${u.id}/book/${id}` };
 const ProfileSchema = z.object({ name: z.string().trim().max(80).default(''), url: z.string().trim().max(400).default(''), description: z.string().trim().max(1500).default(''), priceBand: z.string().trim().max(40).default('') });
 const inflate = async bytes => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer());
 const restoLlm = c => chat.malcolmLlm(c.env, malcolmFetch(c.env));
@@ -424,29 +424,76 @@ app.get('/api/restaurant', needAuth, async c => {
   const u = c.get('user'); const ok = plansMod.isRestaurateur(u); const pl = plans().restaurant;
   const base = { entitled: ok, price: pl.price, annualPrice: pl.annualPrice, menuTypes: restaurant.MENU_TYPES, diets: restaurant.DIET_TAGS };
   if (!ok) return c.json(base);
-  return c.json({ ...base, profile: (await kvJ(c, RK.profile(u))) || null, menus: (await kvJ(c, RK.index(u))) || [] });
+  const prof = await getProfile(c, u); return c.json({ ...base, profile: { ...prof, sources: prof.sources.map(srcView) }, menus: (await kvJ(c, RK.index(u))) || [] });
 });
 app.put('/api/restaurant/profile', needAuth, needResto, async c => {
   const p = ProfileSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user');
   if (p.data.url) { const chk = restaurant.checkUrl(p.data.url); if (!chk.ok) return c.json({ error: chk.error }, 400); p.data.url = chk.url; }
-  const prev = (await kvJ(c, RK.profile(u))) || {}; const next = { ...prev, ...p.data, ...(prev.url !== p.data.url ? { analysis: null, site: null } : {}), updatedAt: new Date().toISOString() };
-  await kvPut(c, RK.profile(u), next); return c.json({ profile: next });
+  const prev = await getProfile(c, u); const { url, ...rest } = p.data; const next = { ...prev, ...rest, updatedAt: new Date().toISOString() };
+  if (url && !next.sources.some(s => s.url === url)) next.sources.push({ id: randomId(6, 'base64url'), kind: 'mine', name: rest.name, url, analysis: null, websiteMenu: '', useInSearch: true, at: new Date().toISOString() });
+  await kvPut(c, RK.profile(u), next); return c.json({ profile: { ...next, sources: next.sources.map(srcView) } });
 });
 app.put('/api/restaurant/search-pref', needAuth, needResto, async c => {
   const on = (await body(c)).on === true; const u = c.get('user'); const prof = (await kvJ(c, RK.profile(u))) || {};
-  await kvPut(c, RK.profile(u), { ...prof, useInSearch: on, updatedAt: new Date().toISOString() }); return c.json({ ok: true, useInSearch: on, linked: !!(prof.url || prof.description) });
+  await kvPut(c, RK.profile(u), { ...prof, useInSearch: on, updatedAt: new Date().toISOString() }); return c.json({ ok: true, useInSearch: on, linked: restaurant.sourcesOf(prof).length > 0 || !!prof.description });
 });
-app.post('/api/restaurant/analyse', rl('resto-analyse', 10, 600), needAuth, needResto, async c => {
-  const u = c.get('user'); const prof = (await kvJ(c, RK.profile(u))) || {}; if (!prof.url) return c.json({ error: 'Add your restaurant’s website address first' }, 400);
-  let page; try { page = await restaurant.safeFetch(prof.url); } catch (e) { return c.json({ error: e.message || 'We couldn’t read that website' }, 422); }
-  let site = restaurant.extractSite(page.html, page.url); let parsed = site.ldMenu.length ? { sections: [{ name: 'Menu', dishes: site.ldMenu }], dishCount: site.ldMenu.length } : restaurant.parseMenuText(site.text);
-  const pagesRead = [page.url];
-  // Follow up to two same-site menu links when the home page carries little menu.
-  for (const link of site.menuLinks.slice(0, 2)) { if (parsed.dishCount >= 12) break; try { const mp = await restaurant.safeFetch(link); const ms = restaurant.extractSite(mp.html, mp.url); const mparsed = restaurant.parseMenuText(ms.text); pagesRead.push(mp.url); if (mparsed.dishCount > parsed.dishCount) { parsed = mparsed; site = { ...site, text: site.text.slice(0, 8000) + '\n' + ms.text.slice(0, 30000) }; } } catch {} }
-  const analysis = await restaurant.analyse(site, parsed, { llm: restoLlm(c), persona: chat.PERSONA });
-  const menuText = parsed.sections.map(s => `${s.name}\n${s.dishes.map(d => `${d.name}${d.price ? ' £' + d.price : ''}${d.description ? ' — ' + d.description : ''}`).join('\n')}`).join('\n\n').slice(0, 12000);
-  const next = { ...prof, name: prof.name || analysis.name || '', priceBand: prof.priceBand || analysis.priceBand, analysis: { ...analysis, pagesRead, at: new Date().toISOString() }, websiteMenu: menuText, updatedAt: new Date().toISOString() };
-  await kvPut(c, RK.profile(u), next); return c.json({ profile: next, parsed });
+// Linked sources (max 8): the member's own restaurant(s) and external benchmarks (competitors / inspiration).
+const SourceSchema = z.object({ kind: z.enum(['mine', 'benchmark']).default('mine'), name: z.string().trim().max(80).default(''), url: z.string().trim().max(400).default(''), menuText: z.string().max(12000).default(''), useInSearch: z.boolean().optional() });
+const getProfile = async (c, u) => { const p = (await kvJ(c, RK.profile(u))) || {}; if (!Array.isArray(p.sources)) { p.sources = restaurant.sourcesOf(p); delete p.url; delete p.analysis; delete p.websiteMenu; } return p; };
+const srcView = s => ({ ...s, websiteMenu: undefined, hasMenu: !!s.websiteMenu, dishCount: s.dishCount || 0 });
+app.post('/api/restaurant/sources', rl('resto-src', 30, 600), needAuth, needResto, async c => {
+  const p = SourceSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user'); const prof = await getProfile(c, u);
+  if (prof.sources.length >= 8) return c.json({ error: 'Up to 8 linked sources — remove one first' }, 400);
+  if (!p.data.url && !p.data.menuText) return c.json({ error: 'Add a website address or a menu' }, 400);
+  let url = ''; if (p.data.url) { const chk = restaurant.checkUrl(p.data.url); if (!chk.ok) return c.json({ error: chk.error }, 400); url = chk.url; }
+  const parsed = p.data.menuText ? restaurant.parseMenuText(p.data.menuText) : null;
+  const src = { id: randomId(6, 'base64url'), kind: p.data.kind, name: p.data.name, url, analysis: null, websiteMenu: p.data.menuText || '', dishCount: parsed ? parsed.dishCount : 0, useInSearch: p.data.useInSearch ?? p.data.kind === 'mine', at: new Date().toISOString() };
+  prof.sources.push(src); await kvPut(c, RK.profile(u), prof); return c.json({ source: srcView(src) }, 201);
+});
+app.patch('/api/restaurant/sources/:sid', needAuth, needResto, async c => {
+  const p = SourceSchema.partial().safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user'); const prof = await getProfile(c, u);
+  const s = prof.sources.find(x => x.id === c.req.param('sid')); if (!s) return c.json({ error: 'Not found' }, 404);
+  for (const k of ['kind', 'name', 'useInSearch']) if (p.data[k] !== undefined) s[k] = p.data[k];
+  if (s.kind === 'cookbook' && p.data.kind && p.data.kind !== 'cookbook') return c.json({ error: 'Cookbook sources can’t change type' }, 400);
+  await kvPut(c, RK.profile(u), prof); return c.json({ source: srcView(s) });
+});
+app.delete('/api/restaurant/sources/:sid', needAuth, needResto, async c => { const u = c.get('user'); const prof = await getProfile(c, u); await c.env.IMAGES.delete(RK.book(u, c.req.param('sid'))); prof.sources = prof.sources.filter(x => x.id !== c.req.param('sid')); await kvPut(c, RK.profile(u), prof); return c.json({ ok: true }); });
+app.get('/api/restaurant/sources/:sid/menu', needAuth, needResto, async c => { const prof = await getProfile(c, c.get('user')); const s = prof.sources.find(x => x.id === c.req.param('sid')); if (s && s.kind === 'cookbook') return c.json({ error: 'Cookbook text stays private and is never shown or reused — Malcolm uses only its style' }, 403); return s ? c.json({ kind: s.kind, name: s.name, menu: s.websiteMenu || '' }) : c.json({ error: 'Not found' }, 404); });
+// Cookbook benchmarks: private reference uploads (rights confirmed). Text is stored only under the member's own key, never returned, shared or used for anyone else.
+const BOOK_MAX_BYTES = 8_000_000, BOOK_MAX_CHARS = 300_000;
+app.post('/api/restaurant/cookbooks', rl('resto-book', 10, 3600), needAuth, needResto, async c => {
+  if ((+c.req.header('content-length') || 0) > BOOK_MAX_BYTES * 1.4 + 4000) return c.json({ error: 'That file is too large (max 8 MB)' }, 413);
+  const b = await body(c); const u = c.get('user'); const name = String(b.name || '').trim().slice(0, 120);
+  if (b.rightsConfirmed !== true) return c.json({ error: 'Please confirm you own this book or have the right to use it for private reference' }, 400);
+  if (!name) return c.json({ error: 'Add the book’s title' }, 400);
+  const prof = await getProfile(c, u); if (prof.sources.length >= 8) return c.json({ error: 'Up to 8 linked sources — remove one first' }, 400);
+  let text = '';
+  try {
+    if (b.kind === 'text') text = String(b.text || '');
+    else if (b.kind === 'pdf') { const bytes = Uint8Array.from(atob(String(b.data || '')), ch => ch.charCodeAt(0)); if (bytes.length > BOOK_MAX_BYTES) return c.json({ error: 'That file is too large (max 8 MB)' }, 413); if (!(bytes[0] === 0x25 && bytes[1] === 0x50)) return c.json({ error: 'That isn’t a PDF file' }, 400); text = await restaurant.pdfText(bytes, inflate, BOOK_MAX_CHARS); }
+    else return c.json({ error: 'Upload a text-based PDF or a text file' }, 400);
+  } catch (e) { console.error('cookbook', e && e.message); return c.json({ error: 'We couldn’t read that file — try a text-based PDF or a .txt export' }, 422); }
+  text = text.slice(0, BOOK_MAX_CHARS); if (text.replace(/\s/g, '').length < 500) return c.json({ error: 'We couldn’t find enough text in that file (scanned books have no text layer)' }, 422);
+  const id = randomId(6, 'base64url'); await c.env.IMAGES.put(RK.book(u, id), text);
+  const analysis = await restaurant.analyseCookbook(text, name, { llm: restoLlm(c), persona: chat.PERSONA });
+  const src = { id, kind: 'cookbook', name, url: '', analysis: { ...analysis, at: new Date().toISOString() }, websiteMenu: '', private: true, rightsConfirmedAt: new Date().toISOString(), chars: text.length, useInSearch: false, at: new Date().toISOString() };
+  prof.sources.push(src); await kvPut(c, RK.profile(u), prof); return c.json({ source: srcView(src) }, 201);
+});
+app.post('/api/restaurant/sources/:sid/analyse', rl('resto-analyse', 10, 600), needAuth, needResto, async c => {
+  const u = c.get('user'); const prof = await getProfile(c, u); const src = prof.sources.find(x => x.id === c.req.param('sid')); if (!src) return c.json({ error: 'Not found' }, 404);
+  if (src.kind === 'cookbook') { const text = (await c.env.IMAGES.get(RK.book(u, src.id))) || ''; src.analysis = { ...(await restaurant.analyseCookbook(text, src.name, { llm: restoLlm(c), persona: chat.PERSONA })), at: new Date().toISOString() }; await kvPut(c, RK.profile(u), prof); return c.json({ source: srcView(src), profile: { ...prof, sources: prof.sources.map(srcView) }, parsed: { dishCount: 0, sections: [] } }); }
+  let site, parsed; const pagesRead = [];
+  if (src.url) {
+    let page; try { page = await restaurant.safeFetch(src.url); } catch (e) { return c.json({ error: e.message || 'We couldn’t read that website' }, 422); }
+    site = restaurant.extractSite(page.html, page.url); parsed = site.ldMenu.length ? { sections: [{ name: 'Menu', dishes: site.ldMenu }], dishCount: site.ldMenu.length } : restaurant.parseMenuText(site.text); pagesRead.push(page.url);
+    for (const link of site.menuLinks.slice(0, 2)) { if (parsed.dishCount >= 12) break; try { const mp = await restaurant.safeFetch(link); const ms = restaurant.extractSite(mp.html, mp.url); const mparsed = restaurant.parseMenuText(ms.text); pagesRead.push(mp.url); if (mparsed.dishCount > parsed.dishCount) { parsed = mparsed; site = { ...site, text: site.text.slice(0, 8000) + '\n' + ms.text.slice(0, 30000) }; } } catch {} }
+  } else { parsed = restaurant.parseMenuText(src.websiteMenu); site = { url: '', title: src.name || 'Uploaded menu', siteName: src.name, description: '', headings: [], cuisines: [], priceRange: '', menuLinks: [], text: src.websiteMenu, ldMenu: [] }; }
+  const mine = prof.sources.filter(s => s.kind === 'mine' && s.analysis).map(s => s.analysis.summary).concat(prof.description || []).join(' ');
+  const analysis = await restaurant.analyse(site, parsed, { llm: restoLlm(c), persona: chat.PERSONA, kind: src.kind, mine: src.kind === 'benchmark' ? mine : null });
+  if (src.url) src.websiteMenu = parsed.sections.map(s => `${s.name}\n${s.dishes.map(d => `${d.name}${d.price ? ' £' + d.price : ''}${d.description ? ' — ' + d.description : ''}`).join('\n')}`).join('\n\n').slice(0, 12000);
+  src.analysis = { ...analysis, pagesRead, at: new Date().toISOString() }; src.dishCount = parsed.dishCount; src.name = src.name || analysis.name || '';
+  if (src.kind === 'mine') { prof.name = prof.name || src.name; prof.priceBand = prof.priceBand || analysis.priceBand; }
+  await kvPut(c, RK.profile(u), prof); return c.json({ source: srcView(src), profile: { ...prof, sources: prof.sources.map(srcView) }, parsed });
 });
 app.post('/api/restaurant/parse-menu', rl('resto-parse', 20, 600), needAuth, needResto, async c => {
   const len = +c.req.header('content-length') || 0; if (len > 6_000_000) return c.json({ error: 'That file is too large (max 4 MB)' }, 413);
@@ -472,8 +519,10 @@ app.get('/api/restaurant/recipes', needAuth, needResto, async c => {
 });
 app.post('/api/restaurant/menus', rl('resto-menu', 12, 600), needAuth, needResto, async c => {
   const p = restaurant.MenuSpec.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user'); const spec = p.data;
-  const prof = (await kvJ(c, RK.profile(u))) || {}; spec.restaurantName = spec.restaurantName || prof.name || ''; spec.description = spec.description || prof.description || '';
-  const menu = await restaurant.buildMenu(spec, { analysis: prof.analysis, priceBand: prof.priceBand }, { llm: restoLlm(c), persona: chat.PERSONA });
+  const prof = await getProfile(c, u); spec.restaurantName = spec.restaurantName || prof.name || ''; spec.description = spec.description || prof.description || '';
+  const books = spec.useCookbooks ? prof.sources.filter(x => x.kind === 'cookbook' && x.analysis).slice(0, 3) : [];
+  const cookbookText = books.length ? (await Promise.all(books.map(b => c.env.IMAGES.get(RK.book(u, b.id))))).filter(Boolean).join('\n').slice(0, 600000) : '';
+  const menu = await restaurant.buildMenu(spec, { cookbooks: books.map(b => ({ ...b.analysis, title: b.name })), cookbookText, analysis: (prof.sources.find(x => x.kind === 'mine' && x.analysis) || {}).analysis, priceBand: prof.priceBand }, { llm: restoLlm(c), persona: chat.PERSONA });
   const id = randomId(9, 'base64url'); await kvPut(c, RK.menu(id), { uid: u.id, menu, spec });
   const idx = ((await kvJ(c, RK.index(u))) || []).filter(m => m.id !== id); idx.unshift({ id, title: menu.title, type: menu.menuTypeLabel, createdAt: menu.createdAt, source: menu.source });
   for (const old of idx.splice(60)) { await c.env.IMAGES.delete(RK.menu(old.id)); if (old.share) await c.env.IMAGES.delete(RK.share(old.share)); }
@@ -510,7 +559,7 @@ app.get('/m/menu/:tok', async c => {
   const m = r.menu; const tags = { vegetarian: 'V', vegan: 'VG', 'gluten-free': 'GF', 'dairy-free': 'DF', 'nut-free': 'NF', halal: 'H' };
   const courses = m.courses.map(co => `<section class="mc"><h2>${escH(co.name)}</h2>${co.dishes.map(d => `<div class="md"><h3>${escH(d.name)}${d.tags.length ? ` <small>${d.tags.map(t => tags[t]).join(' ')}</small>` : ''}${d.price != null ? `<span class="mp">${escH(d.price)}</span>` : ''}</h3>${d.description ? `<p>${escH(d.description)}</p>` : ''}${d.pairing ? `<p class="pair">To drink: ${escH(d.pairing)}</p>` : ''}</div>`).join('')}</section>`).join('');
   return c.html(`<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${escH(m.title)} · ${escH(m.restaurantName || 'Menu')}</title><meta property="og:title" content="${escH((m.restaurantName ? m.restaurantName + ' — ' : '') + m.title)}"><meta property="og:description" content="${escH(m.intro || 'A menu composed with Malcolm on AIchef.food')}"><meta property="og:image" content="${escH(appUrl(c))}/img/brand/og.png"><link rel="stylesheet" href="/css/styles.css"></head>
-<body class="menu-share"><main class="menu-card"><p class="mr">${escH((m.restaurantName || '').toUpperCase())}</p><h1>${escH(m.title)}</h1><p class="mt">${escH([m.menuTypeLabel, ...(m.cuisines || [])].filter(Boolean).join(' · '))}</p>${m.intro ? `<p class="mi">${escH(m.intro)}</p>` : ''}${courses}${m.chefNote ? `<p class="mi">${escH(m.chefNote)}</p>` : ''}
+<body class="menu-share"><main class="menu-card"><p class="mr">${escH((m.restaurantName || '').toUpperCase())}</p><h1>${escH(m.title)}</h1><p class="mt">${escH([m.menuTypeLabel, ...(m.cuisines || [])].filter(Boolean).join(' · '))}</p>${m.intro ? `<p class="mi">${escH(m.intro)}</p>` : ''}${courses}${m.inspiredBy && m.inspiredBy.length ? `<p class="mt">Inspired by the style of ${escH(m.inspiredBy.map(t => '“' + t + '”').join(', '))} · original dishes</p>` : ''}${m.chefNote ? `<p class="mi">${escH(m.chefNote)}</p>` : ''}
 <p class="actions" style="justify-content:center;margin-top:28px"><a class="btn" href="/m/menu/${escH(c.req.param('tok'))}/pdf">Download PDF</a></p><p class="mfoot">Please tell your server about any allergies · Menu composed with Malcolm on <a href="/restauranteur.html">AIchef.food</a></p></main></body></html>`);
 });
 

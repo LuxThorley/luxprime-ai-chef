@@ -78,3 +78,35 @@ test('use-my-restaurant in searches: off by default, blends context when on, kee
   const q2 = R.applySearchContext({ dish: '', cuisines: ['Thai'], cuisine: 'Thai' }, ctx); assert.equal(q2.cuisine, 'Thai');
   assert.equal(R.searchContext({ useInSearch: true }), null);
 });
+test('multiple sources: legacy profile migrates; only ticked sources feed search; benchmarks framed as inspiration', () => {
+  assert.equal(R.sourcesOf({ url: 'https://a.co.uk/', name: 'A' })[0].kind, 'mine'); assert.deepEqual(R.sourcesOf({}), []);
+  const prof = { useInSearch: true, name: 'The Lantern', sources: [
+    { id: '1', kind: 'mine', name: 'The Lantern', analysis: { cuisines: ['French'], style: ['bistro'] }, websiteMenu: 'Mains\nConfit duck leg £21', useInSearch: true },
+    { id: '2', kind: 'benchmark', name: 'Rival Grill', analysis: { cuisines: ['British'] }, websiteMenu: 'Mains\nDry-aged sirloin £34', useInSearch: true },
+    { id: '3', kind: 'benchmark', name: 'Ignored Place', analysis: { cuisines: ['Thai'] }, useInSearch: false }] };
+  const ctx = R.searchContext(prof); assert.match(ctx.text, /Confit duck leg/); assert.match(ctx.text, /Benchmarks for inspiration and contrast only/); assert.match(ctx.text, /Rival Grill/);
+  assert.doesNotMatch(ctx.text, /Ignored Place|Thai/); assert.match(ctx.name, /The Lantern, Rival Grill/);
+  assert.equal(R.searchContext({ ...prof, useInSearch: false }), null);
+  const benchOnly = R.searchContext({ useInSearch: true, sources: [prof.sources[1]] }); assert.doesNotMatch(benchOnly.text, /Restaurant context/);
+});
+test('benchmark analysis + builder: comparison framing, never copies benchmark dishes', async () => {
+  const s = R.extractSite(HTML, 'https://rival.co.uk/'); const p = R.parseMenuText(s.text);
+  const h = R.heuristicAnalysis(s, p, 'benchmark'); assert.equal(h.kind, 'benchmark'); assert.ok(h.gaps.every(g => /differentiate/.test(g)));
+  let seen = ''; await R.analyse(s, p, { kind: 'benchmark', mine: 'Our seaside bistro', llm: async m => { seen = m[0].content; return '{}'; } }); assert.match(seen, /BENCHMARK/); assert.match(seen, /Never reproduce/);
+  const spec = R.MenuSpec.parse({ sourceKind: 'benchmark', sourceMenu: 'Mains\nConfit duck leg £21\nRoast cod, mussels £23', courses: 1, dishesPerCourse: 2 });
+  assert.match(R.builderMessages(spec, {}, '')[1].content, /NOT the client’s/);
+  const out = await R.buildMenu(spec, {}, { llm: async () => JSON.stringify({ title: 'X', courses: [{ name: 'Mains', dishes: [{ name: 'Confit Duck Leg', description: 'copied' }, { name: 'Salt-baked celeriac', description: 'original' }] }] }) });
+  assert.deepEqual(out.courses[0].dishes.map(d => d.name), ['Salt-baked celeriac']);
+});
+test('cookbook benchmarks: style-only analysis, verbatim guard, credited, search uses analysis not text', async () => {
+  const book = 'Slow braised lamb shoulder with anchovy, garlic and rosemary, cooked gently for five hours until it falls apart. '.repeat(3) + 'Roast pears with honey and thyme. Braise the fennel with orange. Pickle the shallots.';
+  const a = R.cookbookHeuristic(book, 'The Slow Kitchen'); assert.ok(a.techniques.includes('braise')); assert.ok(a.pairings.length);
+  let prompt = ''; await R.analyseCookbook(book, 'The Slow Kitchen', { llm: async m => { prompt = m[0].content; return 'x'; } }); assert.match(prompt, /Do NOT reproduce/);
+  assert.equal(R.verbatimRisk('Lamb, cooked gently for five hours until it falls apart', book), true); assert.equal(R.verbatimRisk('Hay-smoked lamb rump, rosemary, anchovy butter', book), false);
+  const spec = R.MenuSpec.parse({ courses: 1, dishesPerCourse: 2 });
+  const out = await R.buildMenu(spec, { cookbooks: [{ ...a, title: 'The Slow Kitchen' }], cookbookText: book }, { llm: async m => { assert.match(m[1].content, /never reproduce recipes/); return JSON.stringify({ title: 'X', courses: [{ name: 'Mains', dishes: [{ name: 'Lamb shoulder', description: 'braised with anchovy, garlic and rosemary, cooked gently for five hours until it falls apart' }, { name: 'Fennel tarte tatin', description: 'orange caramel' }] }] }); } });
+  assert.deepEqual(out.courses[0].dishes.map(d => d.name), ['Fennel tarte tatin']); assert.deepEqual(out.inspiredBy, ['The Slow Kitchen']);
+  const pdf = Buffer.from(R.menuPdf(out, fonts())).toString('latin1'); assert.ok(pdf.includes('%%EOF'));
+  const ctx = R.searchContext({ useInSearch: true, sources: [{ id: 'b', kind: 'cookbook', name: 'The Slow Kitchen', analysis: a, useInSearch: true }] });
+  assert.match(ctx.text, /style only/); assert.doesNotMatch(ctx.text, /five hours/); assert.deepEqual(ctx.inspiredBy, ['The Slow Kitchen']);
+});
