@@ -58,3 +58,28 @@ test('health benefits: historical uses with refs, cautious modern notes, caution
   for (const i of h.items) assert.ok(!/\b(cures?|treats?)\b/i.test(i.modern));
   for (const m of Object.values(D.MODERN)) assert.ok(!/\b(cures?|treats?|studies show|proven)\b/i.test(m), m);
 });
+const fs = require('fs'); const path = require('path');
+const CATF = JSON.parse(fs.readFileSync(path.join(__dirname, '../public/data/dioscorides-catalogue.json'), 'utf8'));
+test('catalogue: every chapter, structured fields, own summaries only, safety classes', () => {
+  const E = CATF.entries; assert.ok(E.length >= 955);
+  const ids = new Set(E.map(e => e.id)); assert.equal(ids.size, E.length);
+  for (const e of E) { assert.match(e.ref, /^(I|II|III|IV|V)\.\d+/); assert.ok(['recipe-safe', 'caution', 'historical-only-toxic', 'non-food'].includes(e.safety)); assert.ok(e.summary.length < 700); assert.ok(!('text' in e) && !('excerpt' in e)); }
+  const by = id => E.find(e => e.id === id);
+  for (const id of ['D4-79', 'D4-76', 'D4-150', 'D4-69', 'D3-52']) assert.equal(by(id).safety, 'historical-only-toxic', id);
+  assert.ok(E.filter(e => e.book === 5 && e.order > 5083).every(e => e.safety === 'non-food' || e.safety === 'recipe-safe'));
+  assert.equal(by('D2-182').safety, 'recipe-safe'); assert.ok(by('D2-182').topics.length);
+  // copyright guard: no long verbatim runs from the source PDF in shipped data
+  const raw = JSON.stringify(require('../src/data/dioscorides.json')); assert.ok(!/excerpt/.test(raw));
+});
+test('search by name or health topic maps to recipe-safe entries; toxic names excluded', () => {
+  const c = B.parseBrief('something for a cough'); assert.ok(c.hints.medicinal); const r = D.references({ dish: 'something for a cough' }); assert.ok(r.length && r.every(x => D.BY_ID[x.no].recipeSafe));
+  const n = B.parseBrief('medicinal fennel and lentil supper'); assert.deepEqual(n.hints.dioIngredients.value, ['Fennel', 'Lentil']);
+  const q = B.applyHints({ cuisines: [] }, n); assert.ok(q.include.includes('fennel') && q.cuisines.includes('Medicinal'));
+  const t = B.applyHints({}, B.parseBrief('a remedy with honey and hemlock')); assert.ok(t.exclude.includes('poison hemlock')); assert.ok(!t.include.some(x => /hemlock/.test(x)));
+  assert.ok(!B.parseBrief('chicken and fennel pasta').hints.dioIngredients, 'plain recipes are not hijacked');
+  assert.ok(D.INTENTS.respiratory.ids.length && B.parseBrief('sluggish digestion').hints.medicinal);
+});
+test('health benefits are paraphrased (no source quotes, no cure claims)', () => {
+  const h = D.healthBenefits({ ingredients: [{ name: 'honey' }, { name: 'chickpeas' }, { name: 'garlic' }] });
+  for (const i of h.items) for (const u of i.dioscorides) { assert.ok(!/[“”"]/.test(u)); assert.ok(!/\bcures?\b/i.test(u)); assert.match(u, /^(Dioscorides|He|His)/); }
+});

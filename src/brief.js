@@ -24,7 +24,10 @@ function parseBrief(input) {
   if (avoid.length) set('avoid', [...new Set(avoid)].slice(0, 8), 'avoid ' + [...new Set(avoid)].slice(0, 8).join(', '));
   const moods = MOODS.filter(w => new RegExp(`\\b${w}\\b`).test(t)); if (moods.length) set('moods', moods.slice(0, 6), moods.slice(0, 6).join(' · '));
   if ((m = t.match(/(?:\b(?:like|reminds? me of|just like)\s+|^)((?:my|that|the) [a-z' ]{3,50}?)(?=\s*(?:[,.;!?]|\bbut\b|\band\b|\bwith\b|$))/)) && /\b(my|that)\b/.test(m[1])) set('memory', m[1].trim(), `memory: ${m[1].trim()}`);
-  const med = dioscorides.intents(t); const explicit = /\b(medicinal|dioscorides|healing herbs?|herbal remed\w*)\b/.test(t);
+  const med = dioscorides.intents(t); const explicit = /\b(medicinal|dioscorides|healing herbs?|herbal remed\w*|remed(?:y|ies|ial)|for (?:a|my) [a-z]+)\b/.test(t);
+  const names = dioscorides.findNames(t);
+  if ((med.length || explicit) && names.safe.length) set('dioIngredients', names.safe.slice(0, 4).map(e => e.name), 'Dioscorides: ' + names.safe.slice(0, 4).map(e => `${e.name} (${e.ref.split(' ').pop()})`).join(', '));
+  if (names.other.length && (med.length || explicit)) set('dioHistorical', names.other.map(e => e.name), 'history only: ' + names.other.map(e => e.name).join(', '));
   if (med.length || explicit) set('medicinal', med, 'Medicinal (Dioscorides)' + (med.length ? ': ' + med.map(k => dioscorides.INTENTS[k].label).join(' · ') : ''));
   const question = /\?\s*$|^(what|how|can|could|which|why|is|should|do|does|any)\b/.test(t.trim());
   return { raw, hints: h, question };
@@ -36,7 +39,9 @@ function applyHints(q, b) {
   if (h.maxMinutes) out.maxMinutes = Math.max(5, Math.min(out.maxMinutes || 480, h.maxMinutes.value));
   if (h.servings) out.servings = h.servings.value;
   if (h.diets) out.diets = [...new Set([...(out.diets || []), ...h.diets.value])];
-  if (h.medicinal && !(out.cuisines || []).some(dioscorides.isMedicinalCuisine)) { out.cuisines = [...(out.cuisines || []), 'Medicinal'].slice(0, 8); out.cuisine = out.cuisines.length > 1 ? out.cuisines.join(' + ') + ' fusion' : 'Medicinal'; }
+  if ((h.medicinal || h.dioIngredients) && !(out.cuisines || []).some(dioscorides.isMedicinalCuisine)) { out.cuisines = [...(out.cuisines || []), 'Medicinal'].slice(0, 8); out.cuisine = out.cuisines.length > 1 ? out.cuisines.join(' + ') + ' fusion' : 'Medicinal'; }
+  if (h.dioIngredients) out.include = [...new Set([...(out.include || []), ...h.dioIngredients.value.map(x => x.toLowerCase())])].slice(0, 20);
+  if (h.dioHistorical) out.exclude = [...new Set([...(out.exclude || []), ...h.dioHistorical.value.map(x => x.toLowerCase())])].slice(0, 20);
   if (h.avoid) out.exclude = [...new Set([...(out.exclude || []), ...h.avoid.value])].slice(0, 20);
   return out;
 }

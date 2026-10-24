@@ -45,7 +45,7 @@ const Prefs = z.object({
 // Escoffier ids are built server-side. First writer wins, so nobody can overwrite a recipe someone else rated.
 function canonicalRecipe(id, blob, { library = [], escEntry = null } = {}) {
   if (id.startsWith('esc-')) return escEntry ? { id, title: escEntry.title, cuisine: 'French (Escoffier)', escoffier: { no: escEntry.no, label: `Escoffier No. ${escEntry.no}`, url: `/escoffier.html?no=${escEntry.no}` }, image: { src: '/img/home/escoffier-sm.webp', alt: escEntry.title } } : null;
-  if (id.startsWith('ai-')) return blob && aiId(blob) === id ? { ...blob, id } : null;
+  if (id.startsWith('ai-')) return blob && aiId(blob) === id ? { ...blob, id, ...(blob.healthBenefits ? { healthBenefits: require('./dioscorides').healthBenefits(blob) } : {}) } : null;
   const lib = library.find(r => r.id === id); return lib ? { ...lib } : null;
 }
 async function upsertRecipe(q, recipe, userId) {

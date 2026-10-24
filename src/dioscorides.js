@@ -16,6 +16,28 @@ const INTENTS = {
   sleep: { re: /\b(sleep|bedtime|relax(?:ing)?|unwind|restful)\b/, label: 'restful', ids: ['D2-165', 'D3-154', 'D3-118', 'D2-75', 'D2-101'] },
   strength: { re: /\b(strength|energy|energi[sz]ing|stamina|hearty|sustaining)\b/, label: 'strengthening', ids: ['D2-107', 'D2-126', 'D2-54', 'D1-148', 'D2-129', 'D1-183', 'D2-111'] }
 };
+// Health topics (catalogue taxonomy): question phrases -> topic; entries ranked by how central the topic is in the chapter.
+const TOPIC_Q = {
+  respiratory: { re: /\b(cough(?:s|ing)?|cold(?:s)?|sore throat|chesty|chest|congest\w*|catarrh|phlegm|breath(?:ing)?|lungs?)\b/, label: 'coughs & chest' },
+  digestion: { re: /\b(sluggish digestion|constipat\w*|bloat\w*|indigestion|heartburn|nause\w*|appetite|stomach ache|tummy|gut health)\b/, label: 'digestion' },
+  'sleep & nerves': { re: /\b(insomnia|can'?t sleep|stress(?:ed)?|anxious|nerves|calm(?:ing)? (?:the )?mind)\b/, label: 'sleep & nerves' },
+  'pain & inflammation': { re: /\b(headaches?|aches?|aching|inflamm\w*|swelling|sore muscles)\b/, label: 'aches & inflammation' },
+  skin: { re: /\b(skin|complexion|glow(?:ing)? skin)\b/, label: 'skin' },
+  'urinary & kidneys': { re: /\b(kidneys?|bladder|urinary|water retention)\b/, label: 'kidneys & urine' },
+  'vitality & nourishment': { re: /\b(tired(?:ness)?|fatigue|run down|recovery|recover(?:ing)?|immune|immunity|vitality)\b/, label: 'vitality & nourishment' },
+  'mouth & teeth': { re: /\b(mouth ulcers?|gums|bad breath|toothache)\b/, label: 'mouth & teeth' },
+  'liver & spleen': { re: /\b(liver|detox|hangover)\b/, label: 'liver' }
+};
+function topicEntries(topic, n = 6) { return SAFE.filter(e => (e.topics || []).includes(topic)).sort((a, b) => a.topics.indexOf(topic) - b.topics.indexOf(topic)).slice(0, n); }
+for (const [k, v] of Object.entries(TOPIC_Q)) if (!INTENTS[k]) INTENTS[k] = { re: v.re, label: 'for ' + v.label, ids: topicEntries(k, 8).map(e => e.id) };
+// Name lookup (flora/fauna): recipe-safe matches, plus non-food/toxic matches so the UI can explain why they are not cooked.
+const CAT = (() => { try { return require('../public/data/dioscorides-catalogue.json').entries; } catch { return []; } })();
+function findNames(text) {
+  const t = ' ' + String(text || '').toLowerCase().replace(/[^a-z ]/g, ' ') + ' ';
+  const safe = SAFE.filter(e => [e.name.toLowerCase(), ...e.keywords].some(k => k.length > 2 && (t.includes(' ' + k + ' ') || t.includes(' ' + k + 's '))));
+  const other = CAT.filter(e => e.safety !== 'recipe-safe' && [e.name, e.common, e.greek, ...(e.safety === 'historical-only-toxic' ? [String(e.name).split(' ').pop()] : [])].filter(Boolean).some(k => k.length > 3 && t.includes(' ' + k.toLowerCase() + ' ')));
+  return { safe, other: other.slice(0, 5).map(e => ({ id: e.id, ref: e.ref, name: e.name, safety: e.safety })) };
+}
 const isMedicinalCuisine = c => /^medicinal\b/i.test(String(c || ''));
 const active = q => !!q && (q.inspirationMode === 'dioscorides' || (q.cuisines || []).some(isMedicinalCuisine) || isMedicinalCuisine(q.cuisine));
 function intents(text) { const t = String(text || '').toLowerCase(); return Object.entries(INTENTS).filter(([, v]) => v.re.test(t)).map(([k]) => k); }
@@ -23,7 +45,7 @@ const words = s => String(s || '').toLowerCase().match(/[a-z]+(?: [a-z]+)?/g) ||
 function matchesEntry(e, name) { const n = ' ' + String(name || '').toLowerCase().replace(/[^a-z ]/g, ' ') + ' '; return e.keywords.some(k => n.includes(' ' + k + ' ') || n.includes(' ' + k + 's ')); }
 function entriesFor(names) { const out = []; for (const nm of names) for (const e of SAFE) if (!out.includes(e) && matchesEntry(e, nm)) out.push(e); return out; }
 function banned(name) { const n = String(name || '').toLowerCase(); return EXCLUDED.find(x => new RegExp(`\\b${x}\\b`).test(n)) || null; }
-const roleText = e => [`${e.name} (${e.greek}; ${e.botanical || 'identity uncertain'})`, ...e.properties.slice(0, 2), ...e.preparations.slice(0, 1)].join(' ').slice(0, 560);
+const roleText = e => String(e.summary || e.name).slice(0, 560);
 // Grounding entries for the AI: the cook's own ingredients first, then intents, then classic Dioscoridean staples.
 function references(q, { top = 6 } = {}) {
   const picked = []; const add = e => { if (e && e.recipeSafe && !picked.includes(e) && picked.length < top) picked.push(e); };
@@ -48,9 +70,9 @@ function cuisineDirective(q) { const other = (q.cuisines || []).filter(c => !isM
 function list(qs = {}) {
   const q = String(qs.q || '').toLowerCase().slice(0, 60), cat = String(qs.cat || '');
   const rows = ENTRIES.filter(e => (!cat || e.category === cat) && (!q || (e.name + ' ' + e.greek + ' ' + e.keywords.join(' ') + ' ' + e.excerpt).toLowerCase().includes(q)));
-  return { attribution: ATTRIBUTION, disclaimer: DISCLAIMER, count: rows.length, categories: [...new Set(ENTRIES.map(e => e.category))], entries: rows.map(e => ({ id: e.id, ref: e.ref, name: e.name, greek: e.greek, category: e.category, botanical: e.botanical, recipeSafe: e.recipeSafe, caution: e.caution, note: (e.properties[0] || e.preparations[0] || '').slice(0, 170) || null })) };
+  return { attribution: ATTRIBUTION, disclaimer: DISCLAIMER, count: rows.length, categories: [...new Set(ENTRIES.map(e => e.category))], entries: rows.map(e => ({ id: e.id, ref: e.ref, name: e.name, greek: e.greek, category: e.category, botanical: e.botanical, recipeSafe: e.recipeSafe, caution: e.caution, note: (e.uses || [])[0] || null })) };
 }
-module.exports = { ENTRIES, SAFE, BY_ID, ATTRIBUTION, DISCLAIMER, EXCLUDED, INTENTS, active, intents, references, cite, unsafe, banned, label, cuisineDirective, isMedicinalCuisine, list, RULE };
+module.exports = { TOPIC_Q, topicEntries, findNames, CAT, ENTRIES, SAFE, BY_ID, ATTRIBUTION, DISCLAIMER, EXCLUDED, INTENTS, active, intents, references, cite, unsafe, banned, label, cuisineDirective, isMedicinalCuisine, list, RULE };
 // Cautious modern notes: well-known nutrition facts only, "may support" wording, no study claims. Keyed by entry id.
 const MODERN = {
   'D2-182': 'Adds flavour without salt; contains sulphur compounds such as allicin. As part of a balanced diet it may support heart health.',
@@ -89,7 +111,7 @@ const INTERACT = { 'D2-182': 'Large amounts of garlic may add to the effect of b
 const HB_DISCLAIMER = 'Historical uses, not medical advice. These dishes do not diagnose, treat, cure or prevent any condition. For any health condition, pregnancy or medication, see a doctor or pharmacist first.';
 function healthBenefits(recipe) {
   const items = cite(recipe).map(c => { const e = BY_ID[c.id];
-    return { name: e.name, ref: e.ref, url: c.url, dioscorides: (e.uses && e.uses.length ? e.uses : e.properties).slice(0, 2), modern: MODERN[e.id] || 'In normal food amounts it adds flavour and variety to a balanced diet.', cautions: [e.caution, INTERACT[e.id]].filter(Boolean) }; });
+    return { name: e.name, ref: e.ref, url: c.url, dioscorides: (e.uses || []).slice(0, 3), modern: MODERN[e.id] || 'In normal food amounts it adds flavour and variety to a balanced diet.', cautions: [e.caution, INTERACT[e.id]].filter(Boolean) }; });
   return items.length ? { title: 'Health Benefits (historical & modern)', items, disclaimer: HB_DISCLAIMER } : null;
 }
 module.exports.healthBenefits = healthBenefits; module.exports.MODERN = MODERN; module.exports.HB_DISCLAIMER = HB_DISCLAIMER;
