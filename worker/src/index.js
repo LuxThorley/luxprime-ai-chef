@@ -414,7 +414,7 @@ const needResto = async (c, next) => plansMod.isRestaurateur(c.get('user')) ? ne
 const kvJ = async (c, k) => { const v = await c.env.IMAGES.get(k); try { return v ? JSON.parse(v) : null; } catch { return null; } };
 const kvPut = (c, k, v) => c.env.IMAGES.put(k, JSON.stringify(v));
 const RK = { profile: u => `rest/${u.id}/profile`, index: u => `rest/${u.id}/menus`, menu: id => `rest/menu/${id}`, share: t => `rest/share/${t}`, book: (u, id) => `rest/${u.id}/book/${id}` };
-const ProfileSchema = z.object({ name: z.string().trim().max(80).default(''), url: z.string().trim().max(400).default(''), description: z.string().trim().max(1500).default(''), priceBand: z.string().trim().max(40).default('') });
+const ProfileSchema = z.object({ venueType: z.enum(Object.keys(restaurant.VENUE_TYPES)).default('restaurant'), name: z.string().trim().max(80).default(''), url: z.string().trim().max(400).default(''), description: z.string().trim().max(1500).default(''), priceBand: z.string().trim().max(40).default('') });
 const inflate = async bytes => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer());
 const restoLlm = c => chat.malcolmLlm(c.env, malcolmFetch(c.env));
 let menuFonts = null;
@@ -422,7 +422,7 @@ const loadMenuFonts = async c => menuFonts || (menuFonts = Object.fromEntries(aw
 const pdfName = m => `${String(m.restaurantName || 'Menu').replace(/[^\w]+/g, '-')}-${String(m.title).replace(/[^\w]+/g, '-')}`.replace(/-+/g, '-').slice(0, 90) + '.pdf';
 app.get('/api/restaurant', needAuth, async c => {
   const u = c.get('user'); const ok = plansMod.isRestaurateur(u); const pl = plans().restaurant;
-  const base = { entitled: ok, price: pl.price, annualPrice: pl.annualPrice, menuTypes: restaurant.MENU_TYPES, diets: restaurant.DIET_TAGS };
+  const base = { entitled: ok, price: pl.price, annualPrice: pl.annualPrice, menuTypes: restaurant.MENU_TYPES, venueTypes: restaurant.VENUE_TYPES, designs: restaurant.DESIGNS, diets: restaurant.DIET_TAGS };
   if (!ok) return c.json(base);
   const prof = await getProfile(c, u); return c.json({ ...base, profile: { ...prof, sources: prof.sources.map(srcView) }, menus: (await kvJ(c, RK.index(u))) || [] });
 });
@@ -559,7 +559,7 @@ app.get('/m/menu/:tok', async c => {
   const m = r.menu; const tags = { vegetarian: 'V', vegan: 'VG', 'gluten-free': 'GF', 'dairy-free': 'DF', 'nut-free': 'NF', halal: 'H' };
   const courses = m.courses.map(co => `<section class="mc"><h2>${escH(co.name)}</h2>${co.dishes.map(d => `<div class="md"><h3>${escH(d.name)}${d.tags.length ? ` <small>${d.tags.map(t => tags[t]).join(' ')}</small>` : ''}${d.price != null ? `<span class="mp">${escH(d.price)}</span>` : ''}</h3>${d.description ? `<p>${escH(d.description)}</p>` : ''}${d.pairing ? `<p class="pair">To drink: ${escH(d.pairing)}</p>` : ''}</div>`).join('')}</section>`).join('');
   return c.html(`<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${escH(m.title)} · ${escH(m.restaurantName || 'Menu')}</title><meta property="og:title" content="${escH((m.restaurantName ? m.restaurantName + ' — ' : '') + m.title)}"><meta property="og:description" content="${escH(m.intro || 'A menu composed with Malcolm on AIchef.food')}"><meta property="og:image" content="${escH(appUrl(c))}/img/brand/og.png"><link rel="stylesheet" href="/css/styles.css"></head>
-<body class="menu-share"><main class="menu-card"><p class="mr">${escH((m.restaurantName || '').toUpperCase())}</p><h1>${escH(m.title)}</h1><p class="mt">${escH([m.menuTypeLabel, ...(m.cuisines || [])].filter(Boolean).join(' · '))}</p>${m.intro ? `<p class="mi">${escH(m.intro)}</p>` : ''}${courses}${m.inspiredBy && m.inspiredBy.length ? `<p class="mt">Inspired by the style of ${escH(m.inspiredBy.map(t => '“' + t + '”').join(', '))} · original dishes</p>` : ''}${m.chefNote ? `<p class="mi">${escH(m.chefNote)}</p>` : ''}
+<body class="menu-share"><main class="menu-card d-${escH(m.design || 'classic')}"><p class="mr">${escH((m.restaurantName || '').toUpperCase())}</p><h1>${escH(m.title)}</h1><p class="mt">${escH([m.venueType && m.venueType !== 'restaurant' ? m.venueLabel : '', m.menuTypeLabel, ...(m.cuisines || [])].filter(Boolean).join(' · '))}</p>${m.intro ? `<p class="mi">${escH(m.intro)}</p>` : ''}${courses}${m.inspiredBy && m.inspiredBy.length ? `<p class="mt">Inspired by the style of ${escH(m.inspiredBy.map(t => '“' + t + '”').join(', '))} · original dishes</p>` : ''}${m.chefNote ? `<p class="mi">${escH(m.chefNote)}</p>` : ''}
 <p class="actions" style="justify-content:center;margin-top:28px"><a class="btn" href="/m/menu/${escH(c.req.param('tok'))}/pdf">Download PDF</a></p><p class="mfoot">Please tell your server about any allergies · Menu composed with Malcolm on <a href="/restauranteur.html">AIchef.food</a></p></main></body></html>`);
 });
 

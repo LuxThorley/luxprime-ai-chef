@@ -238,13 +238,19 @@ function smartSearch(items, raw = {}, now = new Date()) {
 }
 
 // ---------- Menu Builder ----------
-const MENU_TYPES = { 'a-la-carte': 'À la carte', tasting: 'Tasting menu', set: 'Set menu', 'prix-fixe': 'Prix fixe', banquet: 'Banquet / sharing', 'small-plates': 'Small plates', 'sunday-lunch': 'Sunday lunch', brunch: 'Brunch', 'private-dining': 'Private dining', seasonal: 'Seasonal special' };
+const MENU_TYPES = { 'a-la-carte': 'À la carte', tasting: 'Tasting menu', set: 'Set menu', 'prix-fixe': 'Prix fixe', banquet: 'Banquet / sharing', 'small-plates': 'Small plates', 'sunday-lunch': 'Sunday lunch', brunch: 'Brunch', 'private-dining': 'Private dining', seasonal: 'Seasonal special',
+  'pub-classics': 'Pub classics', 'bar-snacks': 'Bar snacks & small plates', 'sunday-roast': 'Sunday roast', 'specials-board': 'Specials board', 'set-lunch': 'Set lunch', carvery: 'Seasonal / carvery', 'sharing-platters': 'Sharing platters' };
+const VENUE_TYPES = { restaurant: 'Restaurant', pub: 'Pub / gastropub', bar: 'Bar', cafe: 'Café', hotel: 'Hotel', bistro: 'Bistro / brasserie', 'wine-bar': 'Wine bar', 'food-hall': 'Food hall / street food', events: 'Events / catering', other: 'Other' };
+const PUB_TYPES = ['pub-classics', 'bar-snacks', 'sunday-roast', 'specials-board', 'set-lunch', 'carvery', 'sharing-platters'];
+const DESIGNS = { classic: 'Classic fine dining', chalkboard: 'Chalkboard (pub)', rustic: 'Rustic kraft (pub & bistro)' };
 const DEFAULT_COURSES = { tasting: ['Amuse-bouche', 'First course', 'Fish course', 'Main course', 'Pre-dessert', 'Dessert', 'Petits fours', 'Cheese', 'Second fish', 'Intermezzo', 'Second main', 'Mignardises'],
   default: ['Starters', 'Mains', 'Desserts', 'Sides', 'Cheese', 'Petits fours', 'Intermezzo', 'Amuse-bouche', 'Fish', 'Pre-dessert', 'Sharing', 'Digestif'], 'small-plates': ['Snacks', 'Small plates', 'Larger plates', 'Sides', 'Sweet plates', 'Cheese', 'Extras', 'Petits fours', 'Bread', 'Raw', 'Grill', 'Garden'],
-  brunch: ['To start', 'Brunch plates', 'Sweet', 'Sides', 'Pastries', 'Extras', 'Juices', 'Bakery', 'Eggs', 'Bowls', 'Grill', 'Treats'], banquet: ['To share', 'Feast', 'Sides', 'Sweet finish', 'Cheese', 'Petits fours', 'Bread', 'Raw', 'Grill', 'Garden', 'Extras', 'Digestif'] };
+  brunch: ['To start', 'Brunch plates', 'Sweet', 'Sides', 'Pastries', 'Extras', 'Juices', 'Bakery', 'Eggs', 'Bowls', 'Grill', 'Treats'], 'pub-classics': ['Starters & nibbles', 'Pub classics', 'From the grill', 'Sides', 'Puddings', 'Cheese', 'Kids', 'Bar snacks', 'Specials', 'Sandwiches', 'Salads', 'Extras'], 'bar-snacks': ['Bar snacks', 'Small plates', 'To share', 'Sweet bites', 'Extras', 'Nuts & nibbles', 'Pickles', 'Bread', 'Cheese', 'Fried', 'Skewers', 'Dips'],
+  'sunday-roast': ['Starters', 'The roasts', 'Trimmings', 'Puddings', 'Cheese', 'Kids', 'Sides', 'Extras', 'Bread', 'Soup', 'Vegetarian roast', 'Coffee'], 'specials-board': ['Today’s specials', 'Fish of the day', 'Pudding of the day', 'Extras', 'Soup', 'Pie', 'Grill', 'Sides', 'Cheese', 'Sweet', 'Snacks', 'Drinks'], 'set-lunch': ['Starters', 'Mains', 'Puddings', 'Sides', 'Cheese', 'Coffee', 'Extras', 'Soup', 'Salads', 'Grill', 'Fish', 'Sweet'], carvery: ['Starters', 'From the carvery', 'Vegetables & trimmings', 'Puddings', 'Cheese', 'Sides', 'Kids', 'Soup', 'Salads', 'Extras', 'Bread', 'Coffee'], 'sharing-platters': ['Platters to share', 'Boards', 'Sides', 'Sweet platters', 'Dips', 'Bread', 'Cheese', 'Charcuterie', 'Fish', 'Garden', 'Fried', 'Extras'],
+  banquet: ['To share', 'Feast', 'Sides', 'Sweet finish', 'Cheese', 'Petits fours', 'Bread', 'Raw', 'Grill', 'Garden', 'Extras', 'Digestif'] };
 const DIET_TAGS = ['vegetarian', 'vegan', 'gluten-free', 'dairy-free', 'nut-free', 'halal'];
 const MenuSpec = z.object({
-  name: z.string().trim().max(80).default(''), restaurantName: z.string().trim().max(80).default(''), description: z.string().trim().max(1500).default(''),
+  venueType: z.enum(Object.keys(VENUE_TYPES)).default('restaurant'), design: z.enum(Object.keys(DESIGNS)).default('classic'), name: z.string().trim().max(80).default(''), restaurantName: z.string().trim().max(80).default(''), description: z.string().trim().max(1500).default(''),
   menuType: z.enum(Object.keys(MENU_TYPES)).default('a-la-carte'), cuisines: z.array(z.string().trim().min(1).max(40)).max(6).default([]), style: z.string().trim().max(120).default(''),
   courses: z.coerce.number().int().min(1).max(12).default(3), dishesPerCourse: z.coerce.number().int().min(1).max(8).default(3), courseNames: z.array(z.string().trim().max(40)).max(12).default([]),
   pinned: z.array(z.string().trim().min(1).max(140)).max(40).default([]), sourceMenu: z.string().max(12000).default(''), sourceKind: z.enum(['mine', 'benchmark']).default('mine'), useCookbooks: z.boolean().default(true),
@@ -258,10 +264,10 @@ function builderMessages(spec, ctx, persona) {
   const names = courseNames(spec); const r = spec.refine; const season = r.season === 'now' ? seasonNow() : r.season;
   return [{ role: 'system', content: `${persona}\nYou are Malcolm, consulting executive chef, composing a restaurant menu for a professional client. British English, UK seasonal produce, menu-card prose (concise, evocative, no clichés). Never include toxic plants or anything unsafe to eat; Dioscorides/medicinal notes are historical food lore only, never health claims. Reply with JSON only:
 {"title":string,"intro":string (1-2 sentences for the top of the card),"courses":[{"name":string,"dishes":[{"name":string,"description":string (max 22 words, key components),"tags":[from ${DIET_TAGS.join('|')}],"price":number|null,"pairing":string|null,"fromHistory":boolean}]}],"chefNote":string,"rationale":string (2-3 sentences on balance, variety and appeal)}` },
-    { role: 'user', content: [`Restaurant: ${spec.restaurantName || 'the restaurant'}`, spec.description && `About the restaurant: ${spec.description}`, `Menu type: ${MENU_TYPES[spec.menuType]}`, `Cuisine/style: ${[...spec.cuisines, spec.style].filter(Boolean).join(', ') || 'chef’s choice'}`,
+    { role: 'user', content: [`Venue: ${spec.restaurantName || 'the venue'} (${VENUE_TYPES[spec.venueType]})`, (spec.venueType === 'pub' || spec.venueType === 'bar' || PUB_TYPES.includes(spec.menuType)) && 'Pub/bar context: hearty, generous, honest British pub cooking done brilliantly; prices and portions to suit a pub; menu prose short and friendly.', spec.description && `About the restaurant: ${spec.description}`, `Menu type: ${MENU_TYPES[spec.menuType]}`, `Cuisine/style: ${[...spec.cuisines, spec.style].filter(Boolean).join(', ') || 'chef’s choice'}`,
       `Courses (exactly these, in order): ${names.join(' | ')}; ${spec.dishesPerCourse} dish${spec.dishesPerCourse > 1 ? 'es' : ''} per course${spec.menuType === 'tasting' ? ' (for a tasting menu with 1 dish per course, make each a single plate)' : ''}.`,
       `Appeal: ${r.appeal}. Variety: ${r.variety} (avoid repeating main proteins/techniques). Taste profile: ${r.taste}. Season: ${season}. Food cost target: ${r.cost}.`, r.diets.length && `Every course must include at least one dish that is: ${r.diets.join(', ')}.`,
-      r.prices ? `Suggest GBP menu prices suited to ${ctx.priceBand || 'the restaurant'}${spec.menuType === 'tasting' || spec.menuType === 'set' || spec.menuType === 'prix-fixe' ? ' (put the per-person price in chefNote and use null for dish prices)' : ''}.` : 'No prices (null).', r.pairings && 'Add a wine or drink pairing per dish (style/grape/region, no brands).',
+      r.prices ? `Suggest GBP menu prices suited to ${ctx.priceBand || 'the restaurant'}${spec.menuType === 'tasting' || spec.menuType === 'set' || spec.menuType === 'prix-fixe' ? ' (put the per-person price in chefNote and use null for dish prices)' : ''}.` : 'No prices (null).', r.pairings && ((spec.venueType === 'pub' || spec.venueType === 'bar' || PUB_TYPES.includes(spec.menuType)) ? 'Add a suggested drink pairing per dish — ale/beer style, cider, or wine style (style only, no brands; these are non-binding suggestions).' : 'Add a wine or drink pairing per dish (style/grape/region, no brands).'),
       spec.cuisines.some(c => /medicinal/i.test(c)) && `Medicinal cuisine: draw on Dioscorides’ recipe-safe foods (${dioscorides.SAFE.slice(0, 30).map(e => e.name).join(', ')}).`,
       spec.pinned.length && `Must feature (refine and elevate) these dishes from the chef’s account history: ${spec.pinned.join('; ')}. Mark them fromHistory true.`,
       ctx.cookbooks && ctx.cookbooks.length && `Cookbook inspiration — borrow style, techniques, pairings and structure only; every dish must be original; never reproduce recipes, dish names or text from these books: ${ctx.cookbooks.map(cookbookBrief).join(' | ')}.`,
@@ -274,12 +280,16 @@ const TPL = {
   main: [['Roast cod, mussels, leeks, saffron and cider sauce', ['gluten-free']], ['Slow-braised beef short rib, celeriac, bone-marrow jus', ['gluten-free', 'dairy-free']], ['Wild mushroom and chestnut pithivier, truffle jus', ['vegetarian']], ['Herb-crusted rack of lamb, pressed potato, salsa verde', ['gluten-free']], ['Pan-roast duck breast, plum, red chicory, five-spice jus', ['gluten-free', 'dairy-free']], ['Chickpea and aubergine tagine, preserved lemon, herb couscous', ['vegan', 'dairy-free']], ['Stone bass, brown shrimp, sea vegetables, beurre blanc', ['gluten-free']], ['Pork belly, black pudding, apple, cider jus', []]],
   dessert: [['Dark chocolate delice, salted caramel, crème fraîche', ['vegetarian']], ['Vanilla panna cotta, poached rhubarb, ginger crumb', ['vegetarian']], ['Sticky toffee pudding, clotted cream ice cream', ['vegetarian']], ['Lemon tart, raspberry sorbet, Italian meringue', ['vegetarian']], ['Coconut rice pudding, mango, lime, toasted coconut', ['vegan', 'gluten-free', 'dairy-free']], ['Honey and fennel-seed cake, figs, yoghurt (after Dioscorides)', ['vegetarian']], ['Baked apple, oat crumble, cinnamon custard', ['vegetarian']]],
   other: [['British cheeses, oatcakes, quince, celery', ['vegetarian']], ['Hand-made petits fours', ['vegetarian']], ['Seasonal sorbet, mint', ['vegan', 'gluten-free', 'dairy-free']], ['Buttered seasonal greens, lemon', ['vegetarian', 'gluten-free']], ['Triple-cooked chips, rosemary salt', ['vegan', 'gluten-free', 'dairy-free']], ['Warm sourdough, cultured butter', ['vegetarian']]] };
-const kind = name => /start|first|amuse|snack|small|share|raw|soup|antipasti|entr|bread|to start/i.test(name) ? 'start' : /dessert|sweet|pudding|pre-dessert|dolci/i.test(name) ? 'dessert' : /cheese|petit|mignard|side|intermezzo|digestif|extra|juice|bakery|pastr/i.test(name) ? 'other' : 'main';
+const PUB_TPL = { start: [['Scotch egg, piccalilli', ['vegetarian']], ['Ham hock croquettes, mustard mayonnaise', []], ['Pint of prawns, Marie Rose', ['gluten-free']], ['Whitebait, lemon, tartare sauce', []], ['Soup of the day, crusty bread', ['vegetarian']], ['Pork scratchings, Bramley apple sauce', ['gluten-free', 'dairy-free']]],
+  main: [['Beer-battered haddock, chips, mushy peas, tartare', ['dairy-free']], ['Steak and ale pie, mash, greens, gravy', []], ['Roast sirloin of beef, Yorkshire pudding, roast potatoes, gravy', []], ['Cumberland sausages, mash, onion gravy', []], ['Chargrilled burger, smoked cheddar, bacon jam, fries', []], ['Mushroom, leek and ale pie, mash, greens', ['vegetarian']], ['Slow-roast pork belly, crackling, apple sauce', ['gluten-free']], ['Ploughman’s board, mature cheddar, pickles, bread', ['vegetarian']]],
+  dessert: [['Sticky toffee pudding, butterscotch, vanilla ice cream', ['vegetarian']], ['Apple and blackberry crumble, custard', ['vegetarian']], ['Treacle tart, clotted cream', ['vegetarian']], ['Eton mess', ['vegetarian', 'gluten-free']], ['Bread and butter pudding', ['vegetarian']]],
+  other: [['Chunky chips, sea salt', ['vegan', 'gluten-free', 'dairy-free']], ['Cauliflower cheese', ['vegetarian']], ['Onion rings, ale batter', ['vegan', 'dairy-free']], ['Local cheeses, chutney, crackers', ['vegetarian']], ['Pigs in blankets', ['dairy-free']]] };
+const kind = name => /roast|carvery|classic|grill|platter|board|special/i.test(name) && !/trimming|snack/i.test(name) ? 'main' : /start|first|amuse|snack|nibble|small|share|raw|soup|antipasti|entr|bread|to start/i.test(name) ? 'start' : /dessert|sweet|pudding|pre-dessert|dolci/i.test(name) ? 'dessert' : /cheese|petit|mignard|side|intermezzo|digestif|extra|juice|bakery|pastr/i.test(name) ? 'other' : 'main';
 function offlineMenu(spec, ctx = {}) {
   const names = courseNames(spec); const r = spec.refine; const pinned = [...spec.pinned]; const usedNames = new Set(); let seed = [...(spec.restaurantName + spec.menuType + spec.cuisines.join())].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7);
   const rnd = n => { seed = (seed * 1103515245 + 12345) >>> 0; return seed % n; };
   const courses = names.map(name => {
-    const k = kind(name); const pool = TPL[k].filter(([n]) => !usedNames.has(n)); const dishes = [];
+    const k = kind(name); const pub = spec.venueType === 'pub' || spec.venueType === 'bar' || PUB_TYPES.includes(spec.menuType); const pool = (pub ? PUB_TPL : TPL)[k].filter(([n]) => !usedNames.has(n)); const dishes = [];
     for (let i = 0; i < spec.dishesPerCourse; i++) {
       if (pinned.length && (k === 'main' || k === 'start') && i === 0) { const t = pinned.shift(); dishes.push({ name: t, description: 'From your kitchen history, refined for the pass — Malcolm will elevate the garnish and plating.', tags: [], price: null, pairing: null, fromHistory: true }); continue; }
       let cands = pool.filter(([n]) => !usedNames.has(n)); if (r.diets.length && i === 0) { const d = cands.filter(([, t]) => r.diets.every(x => t.includes(x))); if (d.length) cands = d; }
@@ -289,7 +299,7 @@ function offlineMenu(spec, ctx = {}) {
     return { name, dishes };
   }).filter(c => c.dishes.length);
   const band = String(ctx.priceBand || ''); const mult = /££££/.test(band) || r.cost === 'premium' ? 1.6 : /£££/.test(band) ? 1.3 : /^£ |budget/.test(band) || r.cost === 'budget' ? 0.75 : 1;
-  const per = spec.menuType === 'tasting' || spec.menuType === 'set' || spec.menuType === 'prix-fixe' || spec.menuType === 'banquet';
+  const per = ['tasting', 'set', 'prix-fixe', 'banquet', 'set-lunch'].includes(spec.menuType);
   if (r.prices && !per) for (const c of courses) for (const d of c.dishes) { const base = { start: 10, main: 22, dessert: 9, other: 6 }[kind(c.name)]; d.price = Math.round(base * mult * 2) / 2; }
   const pp = per ? Math.round((spec.menuType === 'tasting' ? 18 * names.length : 14 + 9 * names.length) * mult) : null;
   return { title: spec.name || `${MENU_TYPES[spec.menuType]}${spec.cuisines.length ? ' · ' + spec.cuisines.join(' & ') : ''}`, intro: spec.description ? spec.description.split(/(?<=\.)\s/)[0].slice(0, 220) : `A ${r.season === 'now' ? seasonNow() : r.season === 'any' ? 'seasonal' : r.season} menu composed by Malcolm for ${spec.restaurantName || 'your restaurant'}.`,
@@ -314,42 +324,49 @@ async function buildMenu(spec, ctx = {}, { llm, persona = '' } = {}) {
   if (menu && !menu.courses.length) menu = null;
   menu = menu || offlineMenu(spec, ctx);
   if (ctx.cookbooks && ctx.cookbooks.length) menu.inspiredBy = ctx.cookbooks.map(b => b.title).slice(0, 4);
-  return { ...menu, restaurantName: spec.restaurantName, menuType: spec.menuType, menuTypeLabel: MENU_TYPES[spec.menuType], cuisines: spec.cuisines, diets: spec.refine.diets, description: spec.description, createdAt: new Date().toISOString() };
+  return { ...menu, venueType: spec.venueType, venueLabel: VENUE_TYPES[spec.venueType], design: spec.design, restaurantName: spec.restaurantName, menuType: spec.menuType, menuTypeLabel: MENU_TYPES[spec.menuType], cuisines: spec.cuisines, diets: spec.refine.diets, description: spec.description, createdAt: new Date().toISOString() };
 }
 
 // ---------- PDF ----------
 const PC = { paper: '#fbf8f2', ink: '#1d1a17', gold: '#b08a45', gold2: '#d8bd84', mute: '#7a7065', rule: '#d9cdb8', copper: '#a8683e', night: '#16171b' };
 const TAG = { vegetarian: 'V', vegan: 'VG', 'gluten-free': 'GF', 'dairy-free': 'DF', 'nut-free': 'NF', halal: 'H' };
+const THEMES = { classic: { ...PC, desc: '#5b5249', intro: '#4a4239', head: 'serifB', title: 'serifI', body: 'serifI' },
+  chalkboard: { paper: '#1f2622', ink: '#f3f0e6', gold: '#e9c46a', gold2: '#7f8c84', mute: '#b9c2bb', rule: '#4b5750', copper: '#f4a261', desc: '#d8ddd6', intro: '#e6e9e2', head: 'sansB', title: 'serifB', body: 'sans', chalk: true },
+  rustic: { paper: '#efe3cc', ink: '#3b2a1a', gold: '#8a5a2b', gold2: '#b8915f', mute: '#6e5a45', rule: '#c9ad85', copper: '#7a3e1d', desc: '#5a4632', intro: '#4a3826', head: 'serifB', title: 'serifB', body: 'serif', rustic: true } };
 function menuPdf(menu, fontFiles, { url = '' } = {}) {
+  const T = THEMES[menu.design] || THEMES.classic; const PC = T;
   const W = 595.28, H = 841.89, M = 64, CW = W - 2 * M; const doc = new Doc({ title: `${menu.restaurantName || 'Menu'} — ${menu.title}`, fontFiles });
-  const frame = pg => { pg.rect(0, 0, W, H, PC.paper); pg.rect(22, 22, W - 44, H - 44, null, { stroke: PC.gold, lw: 0.8 }); pg.rect(27, 27, W - 54, H - 54, null, { stroke: PC.gold2, lw: 0.35 });
+  const frame = pg => { pg.rect(0, 0, W, H, PC.paper);
+    if (T.chalk) { pg.rect(14, 14, W - 28, H - 28, null, { stroke: '#6b4f33', lw: 9 }); pg.rect(20, 20, W - 40, H - 40, null, { stroke: '#8a6a47', lw: 1.2 }); for (let i = 0; i < 40; i++) pg.line(40 + (i * 97) % (W - 80), 40 + (i * 53) % (H - 80), 40 + (i * 97) % (W - 80) + 30, 40 + (i * 53) % (H - 80) + 4, '#ffffff', 0.4, 0.04); return; }
+    if (T.rustic) { pg.rect(26, 26, W - 52, H - 52, null, { stroke: PC.gold, lw: 1.6 }); for (let x = 34; x < W - 34; x += 6) { pg.line(x, 32, x + 2.5, 32, PC.gold2, 0.6); pg.line(x, H - 32, x + 2.5, H - 32, PC.gold2, 0.6); } return; }
+    pg.rect(22, 22, W - 44, H - 44, null, { stroke: PC.gold, lw: 0.8 }); pg.rect(27, 27, W - 54, H - 54, null, { stroke: PC.gold2, lw: 0.35 });
     for (const [x, y] of [[22, 22], [W - 22, 22], [22, H - 22], [W - 22, H - 22]]) pg.rect(x - 3, y - 3, 6, 6, PC.gold); };
   const footer = (pg, n, total) => { pg.line(W / 2 - 60, H - 64, W / 2 + 60, H - 64, PC.gold2, 0.5);
     const legend = [...new Set(menu.courses.flatMap(c => c.dishes.flatMap(d => d.tags)))].map(t => `${TAG[t]} ${t}`).join('  ·  ');
     pg.text((legend ? legend + '  ·  ' : '') + 'Please tell your server about any allergies', W / 2, H - 50, { font: 'sans', size: 6.5, color: PC.mute, align: 'center', maxW: CW });
     pg.text(`Menu composed with Malcolm · AIchef.food${total > 1 ? `   ·   ${n} / ${total}` : ''}`, W / 2, H - 39, { font: 'sans', size: 6, spacing: 0.8, color: PC.gold, align: 'center' }); };
   // Layout pass: measure blocks so courses never split awkwardly.
-  const blocks = []; for (const c of menu.courses) { const ds = c.dishes.map(d => { const desc = d.description ? wrap(d.description, 'serifI', 10.5, CW - 70) : []; return { d, desc, h: 22 + desc.length * 14 + (d.pairing ? 13 : 0) + 8 }; }); blocks.push({ c, ds, h: 46 + ds.reduce((a, x) => a + x.h, 0) }); }
+  const blocks = []; for (const c of menu.courses) { const ds = c.dishes.map(d => { const desc = d.description ? wrap(d.description, T.body, 10.5, CW - 70) : []; return { d, desc, h: 22 + desc.length * 14 + (d.pairing ? 13 : 0) + 8 }; }); blocks.push({ c, ds, h: 46 + ds.reduce((a, x) => a + x.h, 0) }); }
   const pages = []; let pg = null, y = 0, first = true; const bottom = H - 86;
   const newPage = () => { pg = doc.page(W, H); frame(pg); pages.push(pg); y = 74;
     if (first) { pg.text((menu.restaurantName || 'Your Restaurant').toUpperCase(), W / 2, y + 12, { font: 'sansB', size: 9, spacing: 4.2, color: PC.gold, align: 'center', maxW: CW });
-      y = pg.para(menu.title, M, y + 58, CW, { font: 'serifI', size: menu.title.length > 34 ? 28 : 36, lead: 1.1, color: PC.ink, align: 'center', maxLines: 2 }) + 2;
-      pg.text([menu.menuTypeLabel, ...(menu.cuisines || [])].filter(Boolean).join('  ·  ').toUpperCase(), W / 2, y, { font: 'sans', size: 7, spacing: 2, color: PC.mute, align: 'center', maxW: CW }); y += 16;
+      y = pg.para(menu.title, M, y + 58, CW, { font: T.title, size: menu.title.length > 34 ? 28 : 36, lead: 1.1, color: PC.ink, align: 'center', maxLines: 2 }) + 2;
+      pg.text([menu.venueType && menu.venueType !== 'restaurant' ? menu.venueLabel : '', menu.menuTypeLabel, ...(menu.cuisines || [])].filter(Boolean).join('  ·  ').toUpperCase(), W / 2, y, { font: 'sans', size: 7, spacing: 2, color: PC.mute, align: 'center', maxW: CW }); y += 16;
       pg.line(W / 2 - 24, y, W / 2 + 24, y, PC.gold, 0.9); pg.rect(W / 2 - 2.2, y - 2.2, 4.4, 4.4, PC.gold); y += 20;
-      if (menu.intro) y = pg.para(menu.intro, M + 30, y + 4, CW - 60, { font: 'serifI', size: 11.5, lead: 1.4, color: '#4a4239', align: 'center', maxLines: 4 }) + 10;
+      if (menu.intro) y = pg.para(menu.intro, M + 30, y + 4, CW - 60, { font: T.body, size: 11.5, lead: 1.4, color: T.intro, align: 'center', maxLines: 4 }) + 10;
       first = false; } else y = 84; };
   newPage();
   for (const b of blocks) {
     if (y + Math.min(b.h, 46 + b.ds[0].h) > bottom) newPage();
-    y += 14; pg.text(b.c.name.toUpperCase(), W / 2, y, { font: 'sansB', size: 8.5, spacing: 3.2, color: PC.copper, align: 'center' }); y += 9; pg.line(W / 2 - 14, y, W / 2 + 14, y, PC.gold2, 0.6); y += 20;
+    y += 14; pg.text(b.c.name.toUpperCase(), W / 2, y, { font: T.chalk ? 'sansB' : 'sansB', size: T.chalk ? 11 : 8.5, spacing: 3.2, color: PC.copper, align: 'center' }); y += 9; pg.line(W / 2 - 14, y, W / 2 + 14, y, PC.gold2, 0.6); y += 20;
     for (const x of b.ds) {
       if (y + x.h > bottom) { newPage(); }
       const d = x.d; const tags = d.tags.map(t => TAG[t]).join(' '); const price = d.price != null ? (Number.isInteger(d.price) ? String(d.price) : d.price.toFixed(2)) : '';
-      pg.text(d.name, W / 2, y, { font: 'serifB', size: 13, color: PC.ink, align: 'center', maxW: CW - 80 });
+      pg.text(d.name, W / 2, y, { font: T.head, size: 13, color: PC.ink, align: 'center', maxW: CW - 80 });
       if (price) pg.text(price, W - M + 4, y, { font: 'serif', size: 11, color: PC.gold, align: 'right' });
       if (tags) pg.text(tags, M - 4, y, { font: 'sansB', size: 6.5, spacing: 0.8, color: PC.mute });
-      y += 15; for (const l of x.desc) { pg.text(l, W / 2, y, { font: 'serifI', size: 10.5, color: '#5b5249', align: 'center' }); y += 14; }
-      if (d.pairing) { pg.text(`To drink: ${d.pairing}`, W / 2, y, { font: 'sans', size: 7.5, color: PC.gold, align: 'center', maxW: CW - 60 }); y += 13; }
+      y += 15; for (const l of x.desc) { pg.text(l, W / 2, y, { font: T.body, size: 10.5, color: T.desc, align: 'center' }); y += 14; }
+      if (d.pairing) { pg.text(`${menu.venueType === 'pub' || menu.venueType === 'bar' || PUB_TYPES.includes(menu.menuType) ? 'Try with' : 'To drink'}: ${d.pairing}`, W / 2, y, { font: 'sans', size: 7.5, color: PC.gold, align: 'center', maxW: CW - 60 }); y += 13; }
       y += 8;
     }
   }
@@ -383,4 +400,4 @@ function applySearchContext(q, ctx) {
   if ((!q.cuisines || !q.cuisines.length) && ctx.cuisines.length) { out.cuisines = ctx.cuisines.slice(0, 1); out.cuisine = ctx.cuisines[0]; }
   return out;
 }
-module.exports = { cookbookHeuristic, analyseCookbook, verbatimRisk, sourcesOf, menuDishes, searchContext, applySearchContext, checkUrl, safeFetch, readCapped, extractSite, htmlToText, parseMenuText, pdfText, heuristicAnalysis, analyse, historyItems, smartSearch, SearchOpts, MenuSpec, MENU_TYPES, DIET_TAGS, courseNames, builderMessages, offlineMenu, normaliseMenu, buildMenu, menuPdf, seasonNow, jsonFrom, MAX_BYTES };
+module.exports = { VENUE_TYPES, DESIGNS, PUB_TYPES, THEMES, cookbookHeuristic, analyseCookbook, verbatimRisk, sourcesOf, menuDishes, searchContext, applySearchContext, checkUrl, safeFetch, readCapped, extractSite, htmlToText, parseMenuText, pdfText, heuristicAnalysis, analyse, historyItems, smartSearch, SearchOpts, MenuSpec, MENU_TYPES, DIET_TAGS, courseNames, builderMessages, offlineMenu, normaliseMenu, buildMenu, menuPdf, seasonNow, jsonFrom, MAX_BYTES };

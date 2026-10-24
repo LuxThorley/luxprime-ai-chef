@@ -12,9 +12,10 @@
   const cuisines=opts.cuisines.filter(c=>c!=='any');
   box.innerHTML=`
   <div class="grid g2" style="align-items:start">
-  <div class="card"><h3>1 · Your restaurant</h3>
-    <label for="rName">Restaurant name</label><input type="text" id="rName" maxlength="80" value="${esc(P.name||'')}" placeholder="e.g. The Lantern, Bath">
-    <label for="rDesc">Restaurant description</label><textarea id="rDesc" rows="3" maxlength="1500" placeholder="Concept, setting, covers, price point, signature dishes, sourcing…">${esc(P.description||'')}</textarea>
+  <div class="card"><h3>1 · Your venue</h3>
+    <label for="rVenue">Venue type</label>${sel('rVenue',R.venueTypes,P.venueType||'restaurant')}
+    <label for="rName">Venue name</label><input type="text" id="rName" maxlength="80" value="${esc(P.name||'')}" placeholder="e.g. The Lantern, Bath · The Red Lion, Ludlow">
+    <label for="rDesc">Venue description</label><textarea id="rDesc" rows="3" maxlength="1500" placeholder="Concept, setting, covers, price point, signature dishes, sourcing…">${esc(P.description||'')}</textarea>
     <p class="actions"><button class="btn ghost" id="rSave">Save</button></p>
     <h4 style="margin:16px 0 4px">Linked websites &amp; menus</h4><p class="muted" style="font-size:.85rem;margin:0">Add your own restaurant, or external <strong>benchmarks</strong> such as competitors or places that inspire you. Malcolm uses benchmarks for comparison and inspiration only, and never copies their menus.</p>
     <div class="row" style="margin-top:8px"><select id="sKind" aria-label="Source type"><option value="mine">My restaurant</option><option value="benchmark">Benchmark</option></select><input type="text" id="sName" maxlength="80" placeholder="Name (optional)"></div>
@@ -38,6 +39,7 @@
     <div class="grid g3">
       <div><label for="mName">Menu name</label><input type="text" id="mName" maxlength="80" placeholder="e.g. Autumn Tasting Menu"></div>
       <div><label for="mType">Menu type</label>${sel('mType',R.menuTypes,'a-la-carte')}</div>
+      <div><label for="mDesign">PDF design</label>${sel('mDesign',R.designs,['pub','bar'].includes(P.venueType)?'chalkboard':'classic')}</div>
       <div><label for="mStyle">Style</label><input type="text" id="mStyle" maxlength="120" placeholder="e.g. modern, refined, seasonal, sharing"></div>
       <div><label for="mCourses">Number of courses</label><input type="number" id="mCourses" min="1" max="12" value="3"></div>
       <div><label for="mPer">Dishes per course</label><input type="number" id="mPer" min="1" max="8" value="3"></div>
@@ -51,7 +53,7 @@
       <div><label for="fTaste">Taste balance</label>${sel('fTaste',{balanced:'Balanced',rich:'Rich',fresh:'Fresh & bright',spicy:'Spiced',umami:'Umami-led'},'balanced')}</div>
       <div><label for="fSeason">Season</label>${sel('fSeason',{now:'In season now',spring:'Spring',summer:'Summer',autumn:'Autumn',winter:'Winter',any:'Any'},'now')}</div>
       <div><label for="fCost">Food-cost target</label>${sel('fCost',{any:'Any',budget:'Budget / strong GP',mid:'Mid',premium:'Premium'},'any')}</div>
-      <div><label>Extras</label><div class="checks"><label><input type="checkbox" id="fPrices" checked><span>Suggest prices</span></label><label><input type="checkbox" id="fPair"><span>Wine pairings</span></label></div></div>
+      <div><label>Extras</label><div class="checks"><label><input type="checkbox" id="fPrices" checked><span>Suggest prices</span></label><label><input type="checkbox" id="fPair"><span>Drink pairings (wine, ale, cider)</span></label></div></div>
     </div>
     <fieldset><legend>Dietary cover in every course</legend><div class="checks" id="fDiets">${R.diets.map(d=>`<label><input type="checkbox" value="${esc(d)}"><span>${esc(d)}</span></label>`).join('')}</div></fieldset>
     <label for="fPersonal">Personal brief</label><input type="text" id="fPersonal" maxlength="400" placeholder="e.g. showcase our kitchen garden; no beef; a nod to our Cornish roots">
@@ -90,7 +92,7 @@
     try{let body={name:$('#bName').value.trim(),rightsConfirmed:true};if(/\.pdf$/i.test(f.name)){const buf=new Uint8Array(await f.arrayBuffer());let s='';for(let i=0;i<buf.length;i+=32768)s+=String.fromCharCode.apply(null,buf.subarray(i,i+32768));body={...body,kind:'pdf',data:btoa(s)}}else body={...body,kind:'text',text:await f.text()};
       const r=await api('/api/restaurant/cookbooks',{method:'POST',body});sources.push(r.source);renderSources();$('#bName').value='';$('#bFile').value='';$('#bRights').checked=false;toast('Cookbook added (private)')}catch(err){toast(err.message)}finally{btn.disabled=false;btn.textContent='Upload cookbook'}};
   $('#useResto').onchange=async e=>{try{await api('/api/restaurant/search-pref',{method:'PUT',body:{on:e.target.checked}});toast(e.target.checked?'Selected sources will feed your recipe searches':'Off')}catch(err){toast(err.message)}};
-  $('#rSave').onclick=async()=>{try{await api('/api/restaurant/profile',{method:'PUT',body:{name:$('#rName').value,description:$('#rDesc').value}});toast('Saved')}catch(e){toast(e.message)}};
+  $('#rSave').onclick=async()=>{try{await api('/api/restaurant/profile',{method:'PUT',body:{venueType:$('#rVenue').value,name:$('#rName').value,description:$('#rDesc').value}});toast('Saved')}catch(e){toast(e.message)}};
   $('#mFrom').onchange=async()=>{const id=$('#mFrom').value;if(!id){$('#srcInfo').textContent='';return}try{const r=await api(`/api/restaurant/sources/${id}/menu`);$('#mSrc').value=r.menu;$('#mKind').value=r.kind;$('#srcInfo').textContent=r.kind==='benchmark'?'Benchmark menu loaded. Malcolm will use it for inspiration and contrast only, never copying its dishes.':'Your menu is loaded, ready for Malcolm to develop.'}catch(e){toast(e.message)}};
   $('#mSaveSrc').onclick=async()=>{const t=$('#mSrc').value.trim();if(!t){toast('Add a menu first');return}const name=prompt('Name for this menu (optional)','')??'';try{const r=await api('/api/restaurant/sources',{method:'POST',body:{kind:$('#mKind').value,name,menuText:t}});sources.push(r.source);renderSources();toast('Saved as a linked source')}catch(e){toast(e.message)}};
   $('#mFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;if(f.size>4e6){toast('Max 4 MB');return}$('#srcInfo').textContent='Reading '+f.name+'…';
@@ -103,14 +105,14 @@
     try{const {results}=await api('/api/restaurant/recipes?'+p);$('#hRes').innerHTML=results.length?results.slice(0,18).map((r,i)=>`<button type="button" class="chip" data-add="${esc(r.title)}" title="${esc(r.why.join(' · '))}">＋ ${esc(r.title)} <small class="muted">${esc(r.source==='library'?'library':r.why[0]||'')}</small></button>`).join(''):'<p class="muted">No matches — try fewer filters.</p>';
       $('#hRes').querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>{if(pinned.length>=40||pinned.includes(b.dataset.add))return;pinned.push(b.dataset.add);renderPinned()})}catch(e){toast(e.message)}};
   $('#hGo').onclick=search;$('#hQ').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();search()}};search();
-  const spec=()=>({name:$('#mName').value,restaurantName:$('#rName').value,description:$('#rDesc').value,menuType:$('#mType').value,style:$('#mStyle').value,courses:+$('#mCourses').value||3,dishesPerCourse:+$('#mPer').value||1,
+  const spec=()=>({venueType:$('#rVenue').value,design:$('#mDesign').value,name:$('#mName').value,restaurantName:$('#rName').value,description:$('#rDesc').value,menuType:$('#mType').value,style:$('#mStyle').value,courses:+$('#mCourses').value||3,dishesPerCourse:+$('#mPer').value||1,
     courseNames:$('#mCNames').value.split(',').map(s=>s.trim()).filter(Boolean).slice(0,12),cuisines:[...$('#mCz').querySelectorAll('input:checked')].map(i=>i.value).slice(0,6),pinned,sourceMenu:$('#mSrc').value.slice(0,12000),sourceKind:$('#mKind').value,useCookbooks:$('#useBooks').checked,
     refine:{appeal:$('#fAppeal').value,variety:$('#fVariety').value,taste:$('#fTaste').value,season:$('#fSeason').value,cost:$('#fCost').value,prices:$('#fPrices').checked,pairings:$('#fPair').checked,diets:[...$('#fDiets').querySelectorAll('input:checked')].map(i=>i.value),personal:$('#fPersonal').value}});
   $('#mCz').addEventListener('change',e=>{if($('#mCz').querySelectorAll('input:checked').length>6){e.target.checked=false;toast('Up to 6 cuisines')}});
-  $('#mType').onchange=()=>{if($('#mType').value==='tasting'){$('#mCourses').value=7;$('#mPer').value=1}else if(['set','prix-fixe'].includes($('#mType').value)){$('#mCourses').value=3;$('#mPer').value=2}};
+  $('#mType').onchange=()=>{if($('#mType').value==='tasting'){$('#mCourses').value=7;$('#mPer').value=1}else if(['set','prix-fixe','set-lunch'].includes($('#mType').value)){$('#mCourses').value=3;$('#mPer').value=2}else if($('#mType').value==='specials-board'){$('#mCourses').value=2;$('#mPer').value=4}else if($('#mType').value==='sunday-roast'){$('#mCourses').value=3;$('#mPer').value=3}if(['pub-classics','bar-snacks','sunday-roast','specials-board','carvery','sharing-platters'].includes($('#mType').value)&&$('#mDesign').value==='classic')$('#mDesign').value='chalkboard'};
   const tagAbbr={vegetarian:'V',vegan:'VG','gluten-free':'GF','dairy-free':'DF','nut-free':'NF',halal:'H'};
   const show=(id,m,share)=>{current={id,menu:m,share};
-    $('#out').innerHTML=`<div class="card menu-preview"><div class="menu-card"><p class="mr">${esc((m.restaurantName||'').toUpperCase())}</p><h1>${esc(m.title)}</h1><p class="mt">${esc([m.menuTypeLabel,...(m.cuisines||[])].join(' · '))}</p>${m.intro?`<p class="mi">${esc(m.intro)}</p>`:''}
+    $('#out').innerHTML=`<div class="card menu-preview"><div class="menu-card d-${esc(m.design||'classic')}"><p class="mr">${esc((m.restaurantName||'').toUpperCase())}</p><h1>${esc(m.title)}</h1><p class="mt">${esc([m.venueType&&m.venueType!=='restaurant'?m.venueLabel:'',m.menuTypeLabel,...(m.cuisines||[])].filter(Boolean).join(' · '))}</p>${m.intro?`<p class="mi">${esc(m.intro)}</p>`:''}
       ${m.courses.map(c=>`<section class="mc"><h2>${esc(c.name)}</h2>${c.dishes.map(d=>`<div class="md"><h3>${esc(d.name)}${d.tags.length?` <small>${d.tags.map(t=>tagAbbr[t]).join(' ')}</small>`:''}${d.price!=null?`<span class="mp">${esc(d.price)}</span>`:''}${d.fromHistory?' <small title="From your history">★</small>':''}</h3>${d.description?`<p>${esc(d.description)}</p>`:''}${d.pairing?`<p class="pair">To drink: ${esc(d.pairing)}</p>`:''}</div>`).join('')}</section>`).join('')}
       ${m.inspiredBy&&m.inspiredBy.length?`<p class="mt">Inspired by the style of ${esc(m.inspiredBy.map(t=>'“'+t+'”').join(', '))} · original dishes</p>`:''}${m.chefNote?`<p class="mi">${esc(m.chefNote)}</p>`:''}</div>${m.rationale?`<p class="muted" style="font-size:.9rem"><strong>Malcolm’s thinking:</strong> ${esc(m.rationale)}</p>`:''}
       <p class="actions no-print"><a class="btn" href="/api/restaurant/menus/${esc(id)}/pdf">Download PDF</a> <button class="btn ghost" id="share">${share?'Copy share link':'Create share link'}</button> <button class="btn ghost" id="regen">Regenerate</button> <button class="btn ghost" id="del">Delete</button></p><p id="shareOut" class="muted" style="word-break:break-all">${share?`Shared at <a href="/m/menu/${esc(share)}" target="_blank" rel="noopener">${esc(location.origin)}/m/menu/${esc(share)}</a>`:''}</p></div>`;

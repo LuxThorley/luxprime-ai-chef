@@ -110,3 +110,13 @@ test('cookbook benchmarks: style-only analysis, verbatim guard, credited, search
   const ctx = R.searchContext({ useInSearch: true, sources: [{ id: 'b', kind: 'cookbook', name: 'The Slow Kitchen', analysis: a, useInSearch: true }] });
   assert.match(ctx.text, /style only/); assert.doesNotMatch(ctx.text, /five hours/); assert.deepEqual(ctx.inspiredBy, ['The Slow Kitchen']);
 });
+test('pubs: venue type, pub menu formats, pub dishes offline, ale pairing prompt, chalkboard/rustic PDFs', async () => {
+  for (const t of ['pub-classics', 'bar-snacks', 'sunday-roast', 'specials-board', 'set-lunch', 'carvery', 'sharing-platters']) assert.ok(R.MENU_TYPES[t], t);
+  assert.equal(R.VENUE_TYPES.pub, 'Pub / gastropub'); assert.equal(R.MenuSpec.safeParse({ venueType: 'nightclub-on-mars' }).success, false);
+  const spec = R.MenuSpec.parse({ venueType: 'pub', menuType: 'sunday-roast', courses: 3, dishesPerCourse: 2, design: 'chalkboard', restaurantName: 'The Red Lion', refine: { pairings: true } });
+  assert.deepEqual(R.courseNames(spec), ['Starters', 'The roasts', 'Trimmings']);
+  const m = await R.buildMenu(spec, {}); assert.ok(m.courses[1].dishes.some(d => /roast|pie|sausage|haddock|burger|pork|ploughman/i.test(d.name))); assert.equal(m.design, 'chalkboard');
+  assert.match(R.builderMessages(spec, {}, '')[1].content, /ale\/beer style, cider/); assert.match(R.builderMessages(spec, {}, '')[1].content, /Pub \/ gastropub/);
+  for (const d of ['chalkboard', 'rustic', 'classic']) { const pdf = Buffer.from(R.menuPdf({ ...m, design: d }, fonts())).toString('latin1'); assert.ok(pdf.endsWith('%%EOF\n')); }
+  assert.match(Buffer.from(R.menuPdf(m, fonts())).toString('latin1'), /0\.122 0\.149 0\.133 rg/); // chalkboard background
+});
