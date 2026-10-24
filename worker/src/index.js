@@ -528,8 +528,38 @@ app.post('/api/restaurant/menus', rl('resto-menu', 12, 600), needAuth, needResto
   for (const old of idx.splice(60)) { await c.env.IMAGES.delete(RK.menu(old.id)); if (old.share) await c.env.IMAGES.delete(RK.share(old.share)); }
   await kvPut(c, RK.index(u), idx); return c.json({ id, menu }, 201);
 });
+// Full recipe for one menu dish (Malcolm), stored with the menu, in the shared recipe store (for /recipe.html) and in account history.
+async function dishRecipe(c, u, rec, ci, di, { force = false } = {}) {
+  const key = restaurant.dishKey(ci, di); rec.recipes = rec.recipes || {}; if (rec.recipes[key] && !force) return rec.recipes[key];
+  const q = restaurant.dishQuery(rec.menu, ci, di); if (!q) return null;
+  const books = (rec.spec && rec.spec.useCookbooks) ? ((await getProfile(c, u)).sources || []).filter(x => x.kind === 'cookbook') : [];
+  const cookbookText = books.length ? (await Promise.all(books.map(b => c.env.IMAGES.get(RK.book(u, b.id))))).filter(Boolean).join('\n').slice(0, 600000) : '';
+  let references = []; try { if (q.inspirationMode !== 'dioscorides') references = await escoffier.references(d1all(c), q, {}); } catch {}
+  const out = await ai.generate(q, { fetchImpl: malcolmFetch(c.env), retries: 0, references });
+  const r0 = out.recipes && out.recipes[0]; if (!r0) return null;
+  let r = restaurant.finaliseDishRecipe({ ...r0, image: imagesMod.curatedImage(r0), safetyNotes: safetyNotes(r0, q) }, rec.menu, ci, di, { cookbookText, approximate: out.source === 'offline' || !!out.fallbackReason });
+  r = { ...r, id: community.aiId(r) };
+  try { await community.upsertRecipe(cq(c), r, u.id); } catch (e) { console.error('dish upsert', e && e.message); }
+  try { await db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify({ include: [], dish: `${rec.menu.title}: ${r.menuDish}`, menuBuilder: true }), `${r.menuDish} (menu: ${rec.menu.title})`).run(); } catch {}
+  rec.recipes[key] = r; rec.menu.courses[ci].dishes[di].recipeId = r.id; return r;
+}
+const recipeLink = (c, rec) => key => { const r = rec.recipes && rec.recipes[key]; return r ? `${appUrl(c)}/recipe.html?id=${encodeURIComponent(r.id)}` : null; };
+async function allRecipes(c, u, rec, max = 16) {
+  const keys = rec.menu.courses.flatMap((co, ci) => co.dishes.map((_, di) => [ci, di])).slice(0, max).filter(([ci, di]) => !(rec.recipes || {})[restaurant.dishKey(ci, di)]);
+  for (let i = 0; i < keys.length; i += 3) await Promise.all(keys.slice(i, i + 3).map(([ci, di]) => dishRecipe(c, u, rec, ci, di).catch(e => console.error('dish recipe', e && e.message))));
+}
 const ownMenu = async c => { const r = await kvJ(c, RK.menu(String(c.req.param('id')).slice(0, 20))); return r && r.uid === c.get('user').id ? r : null; };
-app.get('/api/restaurant/menus/:id', needAuth, needResto, async c => { const r = await ownMenu(c); return r ? c.json({ id: c.req.param('id'), menu: r.menu, spec: r.spec, share: r.share || null }) : c.json({ error: 'Not found' }, 404); });
+app.get('/api/restaurant/menus/:id', needAuth, needResto, async c => { const r = await ownMenu(c); return r ? c.json({ id: c.req.param('id'), menu: r.menu, spec: r.spec, share: r.share || null, shareRecipes: r.shareRecipes !== false, recipes: Object.fromEntries(Object.entries(r.recipes || {}).map(([k, v]) => [k, { id: v.id, title: v.title, totalMinutes: v.totalMinutes, approximate: v.approximate }])) }) : c.json({ error: 'Not found' }, 404); });
+app.post('/api/restaurant/menus/:id/dish/:ci/:di/recipe', rl('resto-dish', 40, 600), needAuth, needResto, async c => {
+  const rec = await ownMenu(c); if (!rec) return c.json({ error: 'Not found' }, 404); const ci = +c.req.param('ci'), di = +c.req.param('di');
+  if (!rec.menu.courses[ci] || !rec.menu.courses[ci].dishes[di]) return c.json({ error: 'Not found' }, 404);
+  const r = await dishRecipe(c, c.get('user'), rec, ci, di, { force: !!(await body(c)).regenerate }); if (!r) return c.json({ error: 'Malcolm couldn’t write that recipe just now — try again' }, 503);
+  await kvPut(c, RK.menu(c.req.param('id')), rec); return c.json({ recipe: r, url: `/recipe.html?id=${encodeURIComponent(r.id)}` });
+});
+app.post('/api/restaurant/menus/:id/recipes', rl('resto-dish-all', 6, 600), needAuth, needResto, async c => {
+  const rec = await ownMenu(c); if (!rec) return c.json({ error: 'Not found' }, 404); await allRecipes(c, c.get('user'), rec); await kvPut(c, RK.menu(c.req.param('id')), rec);
+  return c.json({ recipes: Object.fromEntries(Object.entries(rec.recipes || {}).map(([k, v]) => [k, { id: v.id, title: v.title, totalMinutes: v.totalMinutes, approximate: v.approximate }])) });
+});
 app.delete('/api/restaurant/menus/:id', needAuth, needResto, async c => {
   const r = await ownMenu(c); if (!r) return c.json({ error: 'Not found' }, 404); const id = c.req.param('id'); const u = c.get('user');
   await c.env.IMAGES.delete(RK.menu(id)); if (r.share) await c.env.IMAGES.delete(RK.share(r.share));
@@ -537,11 +567,13 @@ app.delete('/api/restaurant/menus/:id', needAuth, needResto, async c => {
 });
 app.get('/api/restaurant/menus/:id/pdf', needAuth, needResto, async c => {
   const r = await ownMenu(c); if (!r) return c.json({ error: 'Not found' }, 404);
-  const pdf = restaurant.menuPdf(r.menu, await loadMenuFonts(c));
-  return new Response(pdf, { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${pdfName(r.menu)}"`, 'Cache-Control': 'no-store' } });
+  const kitchen = c.req.query('kitchen') === '1'; if (kitchen) { await allRecipes(c, c.get('user'), r); await kvPut(c, RK.menu(c.req.param('id')), r); }
+  const pdf = restaurant.menuPdf(r.menu, await loadMenuFonts(c), { recipes: r.recipes || {}, kitchen, linkFor: recipeLink(c, r) });
+  return new Response(pdf, { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${pdfName(r.menu).replace(/\.pdf$/, kitchen ? '-kitchen-pack.pdf' : '.pdf')}"`, 'Cache-Control': 'no-store' } });
 });
 app.post('/api/restaurant/menus/:id/share', needAuth, needResto, async c => {
   const r = await ownMenu(c); if (!r) return c.json({ error: 'Not found' }, 404); const id = c.req.param('id'); const u = c.get('user');
+  const sb = await body(c); if (sb.recipes !== undefined) { r.shareRecipes = sb.recipes !== false; await kvPut(c, RK.menu(id), r); }
   if (!r.share) { r.share = randomId(12, 'base64url'); await c.env.IMAGES.put(RK.share(r.share), id); await kvPut(c, RK.menu(id), r);
     await kvPut(c, RK.index(u), ((await kvJ(c, RK.index(u))) || []).map(m => m.id === id ? { ...m, share: r.share } : m)); }
   return c.json({ url: `${appUrl(c)}/m/menu/${r.share}` });
@@ -553,11 +585,12 @@ app.delete('/api/restaurant/menus/:id/share', needAuth, needResto, async c => {
 });
 const sharedMenu = async c => { const t = String(c.req.param('tok')); if (!/^[A-Za-z0-9_-]{8,24}$/.test(t)) return null; const id = await c.env.IMAGES.get(RK.share(t)); if (!id) return null; const r = await kvJ(c, RK.menu(id)); return r && r.share === t ? r : null; };
 app.get('/m/menu/:tok/pdf', async c => { const r = await sharedMenu(c); if (!r) return c.text('This menu is no longer shared', 404);
-  return new Response(restaurant.menuPdf(r.menu, await loadMenuFonts(c)), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${pdfName(r.menu)}"`, 'Cache-Control': 'public, max-age=300', 'X-Robots-Tag': 'noindex' } }); });
+  return new Response(restaurant.menuPdf(r.menu, await loadMenuFonts(c), r.shareRecipes !== false ? { linkFor: recipeLink(c, r) } : {}), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${pdfName(r.menu)}"`, 'Cache-Control': 'public, max-age=300', 'X-Robots-Tag': 'noindex' } }); });
 app.get('/m/menu/:tok', async c => {
   const r = await sharedMenu(c); if (!r) return c.html(unsubPage('This menu is no longer shared.').replace('Email preferences', 'Menu not found').replace(/<p class="muted"[\s\S]*?<\/p>/, ''), 404);
   const m = r.menu; const tags = { vegetarian: 'V', vegan: 'VG', 'gluten-free': 'GF', 'dairy-free': 'DF', 'nut-free': 'NF', halal: 'H' };
-  const courses = m.courses.map(co => `<section class="mc"><h2>${escH(co.name)}</h2>${co.dishes.map(d => `<div class="md"><h3>${escH(d.name)}${d.tags.length ? ` <small>${d.tags.map(t => tags[t]).join(' ')}</small>` : ''}${d.price != null ? `<span class="mp">${escH(d.price)}</span>` : ''}</h3>${d.description ? `<p>${escH(d.description)}</p>` : ''}${d.pairing ? `<p class="pair">To drink: ${escH(d.pairing)}</p>` : ''}</div>`).join('')}</section>`).join('');
+  const link = r.shareRecipes !== false ? recipeLink(c, r) : () => null;
+  const courses = m.courses.map((co, ci) => `<section class="mc"><h2>${escH(co.name)}</h2>${co.dishes.map((d, di) => `<div class="md"><h3>${link(restaurant.dishKey(ci, di)) ? `<a href="${escH(link(restaurant.dishKey(ci, di)))}" style="color:inherit">${escH(d.name)}</a>` : escH(d.name)}${d.tags.length ? ` <small>${d.tags.map(t => tags[t]).join(' ')}</small>` : ''}${d.price != null ? `<span class="mp">${escH(d.price)}</span>` : ''}</h3>${d.description ? `<p>${escH(d.description)}</p>` : ''}${d.pairing ? `<p class="pair">To drink: ${escH(d.pairing)}</p>` : ''}</div>`).join('')}</section>`).join('');
   return c.html(`<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${escH(m.title)} · ${escH(m.restaurantName || 'Menu')}</title><meta property="og:title" content="${escH((m.restaurantName ? m.restaurantName + ' — ' : '') + m.title)}"><meta property="og:description" content="${escH(m.intro || 'A menu composed with Malcolm on AIchef.food')}"><meta property="og:image" content="${escH(appUrl(c))}/img/brand/og.png"><link rel="stylesheet" href="/css/styles.css"></head>
 <body class="menu-share"><main class="menu-card d-${escH(m.design || 'classic')}"><p class="mr">${escH((m.restaurantName || '').toUpperCase())}</p><h1>${escH(m.title)}</h1><p class="mt">${escH([m.venueType && m.venueType !== 'restaurant' ? m.venueLabel : '', m.menuTypeLabel, ...(m.cuisines || [])].filter(Boolean).join(' · '))}</p>${m.intro ? `<p class="mi">${escH(m.intro)}</p>` : ''}${courses}${m.inspiredBy && m.inspiredBy.length ? `<p class="mt">Inspired by the style of ${escH(m.inspiredBy.map(t => '“' + t + '”').join(', '))} · original dishes</p>` : ''}${m.chefNote ? `<p class="mi">${escH(m.chefNote)}</p>` : ''}
 <p class="actions" style="justify-content:center;margin-top:28px"><a class="btn" href="/m/menu/${escH(c.req.param('tok'))}/pdf">Download PDF</a></p><p class="mfoot">Please tell your server about any allergies · Menu composed with Malcolm on <a href="/restauranteur.html">AIchef.food</a></p></main></body></html>`);

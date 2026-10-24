@@ -327,13 +327,30 @@ async function buildMenu(spec, ctx = {}, { llm, persona = '' } = {}) {
   return { ...menu, venueType: spec.venueType, venueLabel: VENUE_TYPES[spec.venueType], design: spec.design, restaurantName: spec.restaurantName, menuType: spec.menuType, menuTypeLabel: MENU_TYPES[spec.menuType], cuisines: spec.cuisines, diets: spec.refine.diets, description: spec.description, createdAt: new Date().toISOString() };
 }
 
+// ---------- Per-dish full recipes ----------
+const dishKey = (ci, di) => `${ci}-${di}`;
+function dishQuery(menu, ci, di) {
+  const c = menu.courses[ci]; const d = c && c.dishes[di]; if (!d) return null;
+  const med = (menu.cuisines || []).some(x => /medicinal/i.test(x)); const cz = (menu.cuisines || []).filter(Boolean).slice(0, 3);
+  return { include: [], exclude: [], dish: `${d.name}${d.description ? ' — ' + d.description : ''}. A complete, professional recipe for this exact ${c.name.toLowerCase()} dish on a ${String(menu.menuTypeLabel || 'restaurant').toLowerCase()} menu at ${menu.restaurantName || 'a ' + (menu.venueLabel || 'restaurant').toLowerCase()}: keep the dish name, components and garnish; include mise en place and timings.`.slice(0, 1000),
+    maxMinutes: 300, difficulty: null, servings: 4, diets: (d.tags || []).filter(t => ['vegetarian', 'vegan', 'gluten-free', 'dairy-free', 'nut-free', 'halal'].includes(t)), excludeAllergens: [], cuisines: cz, cuisine: cz.length > 1 ? cz.join(' + ') + ' fusion' : (cz[0] || 'any'),
+    inspirationMode: med ? 'dioscorides' : 'blend', kidsMode: false, limit: 1, brief: { raw: '', constraints: {}, question: null } };
+}
+// Clean a generated recipe for the menu: keep the menu's dish name, guard against cookbook verbatim text, attach Health Benefits where relevant.
+function finaliseDishRecipe(r, menu, ci, di, { cookbookText = '', approximate = false } = {}) {
+  const d = menu.courses[ci].dishes[di]; const out = { ...r, menuDish: d.name, course: menu.courses[ci].name, approximate: !!approximate };
+  if (cookbookText) { out.steps = (out.steps || []).filter(s => !verbatimRisk(s.text || s, cookbookText)); out.tagline = out.tagline && verbatimRisk(out.tagline, cookbookText) ? '' : out.tagline; }
+  if ((menu.cuisines || []).some(x => /medicinal/i.test(x)) && !out.healthBenefits) { const hb = dioscorides.healthBenefits(out); if (hb) out.healthBenefits = hb; }
+  return out;
+}
+
 // ---------- PDF ----------
 const PC = { paper: '#fbf8f2', ink: '#1d1a17', gold: '#b08a45', gold2: '#d8bd84', mute: '#7a7065', rule: '#d9cdb8', copper: '#a8683e', night: '#16171b' };
 const TAG = { vegetarian: 'V', vegan: 'VG', 'gluten-free': 'GF', 'dairy-free': 'DF', 'nut-free': 'NF', halal: 'H' };
 const THEMES = { classic: { ...PC, desc: '#5b5249', intro: '#4a4239', head: 'serifB', title: 'serifI', body: 'serifI' },
   chalkboard: { paper: '#1f2622', ink: '#f3f0e6', gold: '#e9c46a', gold2: '#7f8c84', mute: '#b9c2bb', rule: '#4b5750', copper: '#f4a261', desc: '#d8ddd6', intro: '#e6e9e2', head: 'sansB', title: 'serifB', body: 'sans', chalk: true },
   rustic: { paper: '#efe3cc', ink: '#3b2a1a', gold: '#8a5a2b', gold2: '#b8915f', mute: '#6e5a45', rule: '#c9ad85', copper: '#7a3e1d', desc: '#5a4632', intro: '#4a3826', head: 'serifB', title: 'serifB', body: 'serif', rustic: true } };
-function menuPdf(menu, fontFiles, { url = '' } = {}) {
+function menuPdf(menu, fontFiles, { url = '', recipes = {}, kitchen = false, linkFor = null } = {}) {
   const T = THEMES[menu.design] || THEMES.classic; const PC = T;
   const W = 595.28, H = 841.89, M = 64, CW = W - 2 * M; const doc = new Doc({ title: `${menu.restaurantName || 'Menu'} — ${menu.title}`, fontFiles });
   const frame = pg => { pg.rect(0, 0, W, H, PC.paper);
@@ -346,7 +363,7 @@ function menuPdf(menu, fontFiles, { url = '' } = {}) {
     pg.text((legend ? legend + '  ·  ' : '') + 'Please tell your server about any allergies', W / 2, H - 50, { font: 'sans', size: 6.5, color: PC.mute, align: 'center', maxW: CW });
     pg.text(`Menu composed with Malcolm · AIchef.food${total > 1 ? `   ·   ${n} / ${total}` : ''}`, W / 2, H - 39, { font: 'sans', size: 6, spacing: 0.8, color: PC.gold, align: 'center' }); };
   // Layout pass: measure blocks so courses never split awkwardly.
-  const blocks = []; for (const c of menu.courses) { const ds = c.dishes.map(d => { const desc = d.description ? wrap(d.description, T.body, 10.5, CW - 70) : []; return { d, desc, h: 22 + desc.length * 14 + (d.pairing ? 13 : 0) + 8 }; }); blocks.push({ c, ds, h: 46 + ds.reduce((a, x) => a + x.h, 0) }); }
+  const blocks = []; for (const c of menu.courses) { const ci = menu.courses.indexOf(c); const ds = c.dishes.map((d, di) => { const desc = d.description ? wrap(d.description, T.body, 10.5, CW - 70) : []; return { d, desc, key: dishKey(ci, di), h: 22 + desc.length * 14 + (d.pairing ? 13 : 0) + 8 }; }); blocks.push({ c, ds, h: 46 + ds.reduce((a, x) => a + x.h, 0) }); }
   const pages = []; let pg = null, y = 0, first = true; const bottom = H - 86;
   const newPage = () => { pg = doc.page(W, H); frame(pg); pages.push(pg); y = 74;
     if (first) { pg.text((menu.restaurantName || 'Your Restaurant').toUpperCase(), W / 2, y + 12, { font: 'sansB', size: 9, spacing: 4.2, color: PC.gold, align: 'center', maxW: CW });
@@ -362,7 +379,8 @@ function menuPdf(menu, fontFiles, { url = '' } = {}) {
     for (const x of b.ds) {
       if (y + x.h > bottom) { newPage(); }
       const d = x.d; const tags = d.tags.map(t => TAG[t]).join(' '); const price = d.price != null ? (Number.isInteger(d.price) ? String(d.price) : d.price.toFixed(2)) : '';
-      pg.text(d.name, W / 2, y, { font: T.head, size: 13, color: PC.ink, align: 'center', maxW: CW - 80 });
+      const nw = pg.text(d.name, W / 2, y, { font: T.head, size: 13, color: PC.ink, align: 'center', maxW: CW - 80 });
+      if (linkFor && x.key) { const href = linkFor(x.key); if (href) pg.link(W / 2 - nw / 2, y - 12, nw, 16, href); }
       if (price) pg.text(price, W - M + 4, y, { font: 'serif', size: 11, color: PC.gold, align: 'right' });
       if (tags) pg.text(tags, M - 4, y, { font: 'sansB', size: 6.5, spacing: 0.8, color: PC.mute });
       y += 15; for (const l of x.desc) { pg.text(l, W / 2, y, { font: T.body, size: 10.5, color: T.desc, align: 'center' }); y += 14; }
@@ -372,7 +390,9 @@ function menuPdf(menu, fontFiles, { url = '' } = {}) {
   }
   if (menu.inspiredBy && menu.inspiredBy.length) { if (y + 30 > bottom) newPage(); y += 14; pg.text(`Inspired by the style of ${menu.inspiredBy.map(t => '“' + t + '”').join(', ')} · original dishes`, W / 2, y, { font: 'serifI', size: 9, color: PC.mute, align: 'center', maxW: CW }); y += 8; }
   if (menu.chefNote) { if (y + 40 > bottom) newPage(); y += 10; pg.line(M + 120, y, W - M - 120, y, PC.rule, 0.5); y = pg.para(menu.chefNote, M + 40, y + 20, CW - 80, { font: 'serifI', size: 12, lead: 1.35, color: PC.ink, align: 'center', maxLines: 3 }); }
-  pages.forEach((p, i) => footer(p, i + 1, pages.length));
+  const guestPages = pages.length;
+  if (kitchen) kitchenPack(doc, menu, recipes, { W, H, M, CW, linkFor, pages });
+  pages.forEach((p, i) => i < guestPages ? footer(p, i + 1, guestPages) : kfooter(p, menu, W, H));
   return doc.save();
 }
 // Restauranteur "use my restaurant in searches": a compact culinary context blended into general recipe searches.
@@ -400,4 +420,35 @@ function applySearchContext(q, ctx) {
   if ((!q.cuisines || !q.cuisines.length) && ctx.cuisines.length) { out.cuisines = ctx.cuisines.slice(0, 1); out.cuisine = ctx.cuisines[0]; }
   return out;
 }
-module.exports = { VENUE_TYPES, DESIGNS, PUB_TYPES, THEMES, cookbookHeuristic, analyseCookbook, verbatimRisk, sourcesOf, menuDishes, searchContext, applySearchContext, checkUrl, safeFetch, readCapped, extractSite, htmlToText, parseMenuText, pdfText, heuristicAnalysis, analyse, historyItems, smartSearch, SearchOpts, MenuSpec, MENU_TYPES, DIET_TAGS, courseNames, builderMessages, offlineMenu, normaliseMenu, buildMenu, menuPdf, seasonNow, jsonFrom, MAX_BYTES };
+// Kitchen pack: printer-friendly prep sheets (one or more pages per dish) appended after the guest menu.
+const K = { ink: '#1d1a17', mute: '#6f665c', rule: '#d9cdb8', accent: '#a8683e', band: '#f3ede2' };
+function kfooter(pg, menu, W, H) { pg.line(48, H - 40, W - 48, H - 40, K.rule, 0.5); pg.text(`KITCHEN PACK · ${(menu.restaurantName || '').toUpperCase()} · ${String(menu.title).toUpperCase()} · NOT FOR GUESTS`, W / 2, H - 28, { font: 'sansB', size: 6, spacing: 1, color: K.mute, align: 'center', maxW: W - 96 }); }
+function kitchenPack(doc, menu, recipes, { W, H, linkFor, pages }) {
+  const M = 48, CW = W - 2 * M, bottom = H - 60; let pg, y;
+  const page = () => { pg = doc.page(W, H); pg.rect(0, 0, W, H, '#ffffff'); pages.push(pg); y = 56; };
+  const need = h => { if (y + h > bottom) { page(); return true; } return false; };
+  page(); pg.text('KITCHEN PACK', M, y + 10, { font: 'sansB', size: 9, spacing: 3, color: K.accent }); pg.text(menu.title, M, y + 44, { font: 'serifB', size: 26, color: K.ink, maxW: CW });
+  y += 66; pg.text(`${menu.restaurantName || ''}${menu.restaurantName ? ' · ' : ''}${menu.menuTypeLabel || ''} · full recipes & prep sheets`, M, y, { font: 'sans', size: 9, color: K.mute, maxW: CW }); y += 22;
+  menu.courses.forEach((c, ci) => c.dishes.forEach((d, di) => { const r = recipes[dishKey(ci, di)]; pg.text(`${c.name} — ${d.name}`, M, y, { font: 'serif', size: 10.5, color: K.ink, maxW: CW - 90 }); pg.text(r ? `${r.totalMinutes || '?'} min · serves ${r.servings || r.baseServings || '?'}` : 'recipe not generated', W - M, y, { font: 'sans', size: 8, color: K.mute, align: 'right' }); y += 15; need(15); }));
+  menu.courses.forEach((c, ci) => c.dishes.forEach((d, di) => {
+    const r = recipes[dishKey(ci, di)]; if (!r) return; page();
+    pg.rect(M, y - 6, CW, 58, K.band); pg.text(c.name.toUpperCase(), M + 12, y + 10, { font: 'sansB', size: 7, spacing: 2, color: K.accent }); pg.text(d.name, M + 12, y + 34, { font: 'serifB', size: 18, color: K.ink, maxW: CW - 24 });
+    const href = linkFor && linkFor(dishKey(ci, di)); if (href) { pg.text('Open full recipe ›', W - M - 12, y + 10, { font: 'sansB', size: 7, color: K.accent, align: 'right' }); pg.link(W - M - 90, y, 80, 14, href); }
+    y += 68;
+    const facts = [`Yield: serves ${r.servings || r.baseServings || 4}`, r.prepMinutes != null && `Prep ${r.prepMinutes} min`, r.cookMinutes != null && `Cook ${r.cookMinutes} min`, `Total ${r.totalMinutes || '?'} min`, r.difficulty && `Difficulty: ${r.difficulty}`].filter(Boolean).join('   ·   ');
+    pg.text(facts, M, y, { font: 'sansB', size: 8, color: K.ink, maxW: CW }); y += 14;
+    const al = (r.allergens || []); pg.text(`Allergens (UK 14): ${al.length ? al.join(', ') : 'none declared — check every label'}`, M, y, { font: 'sans', size: 8, color: al.length ? '#9b2c2c' : K.mute, maxW: CW }); y += 12;
+    if (r.approximate) { pg.text('Malcolm was busy — this is the closest library recipe; regenerate it from the Menu Builder.', M, y, { font: 'sans', size: 7.5, color: '#9b2c2c', maxW: CW }); y += 12; }
+    y += 8; pg.text('INGREDIENTS', M, y, { font: 'sansB', size: 7.5, spacing: 1.6, color: K.accent }); y += 14;
+    const ings = (r.ingredients || []).map(i => i.display || [i.qty, i.unit && i.unit !== 'x' ? i.unit : '', i.name].filter(Boolean).join(' ')); const half = Math.ceil(ings.length / 2); const colW = CW / 2 - 10;
+    for (let i = 0; i < half; i++) { need(13); pg.text('• ' + ings[i], M, y, { font: 'serif', size: 9.5, color: K.ink, maxW: colW }); if (ings[i + half]) pg.text('• ' + ings[i + half], M + CW / 2, y, { font: 'serif', size: 9.5, color: K.ink, maxW: colW }); y += 13; }
+    y += 10; need(30); pg.text('METHOD', M, y, { font: 'sansB', size: 7.5, spacing: 1.6, color: K.accent }); y += 14;
+    (r.steps || []).forEach((s, n) => { const t = (s.text || s) + (s.timerMinutes ? `  (${s.timerMinutes} min)` : ''); const lines = wrap(t, 'serif', 9.5, CW - 22); need(lines.length * 12.5 + 4); pg.text(String(n + 1), M, y, { font: 'sansB', size: 9, color: K.accent }); for (const l of lines) { pg.text(l, M + 20, y, { font: 'serif', size: 9.5, color: K.ink }); y += 12.5; } y += 4; });
+    const notes = (r.safetyNotes || []).map(x => x.text || x).filter(Boolean); if (notes.length) { y += 6; need(26); pg.text('FOOD SAFETY', M, y, { font: 'sansB', size: 7.5, spacing: 1.6, color: K.accent }); y += 13; for (const nt of notes.slice(0, 6)) { const ls = wrap(String(nt), 'sans', 8, CW); need(ls.length * 11); for (const l of ls) { pg.text(l, M, y, { font: 'sans', size: 8, color: K.mute }); y += 11; } } }
+    const hb = r.healthBenefits; if (hb && hb.items && hb.items.length) { y += 6; need(40); pg.text('HEALTH BENEFITS (HISTORICAL & MODERN)', M, y, { font: 'sansB', size: 7.5, spacing: 1.6, color: K.accent }); y += 13;
+      for (const it of hb.items.slice(0, 5)) { const ls = wrap(`${it.name}: ${it.modern}`, 'sans', 8, CW); need(ls.length * 11); for (const l of ls) { pg.text(l, M, y, { font: 'sans', size: 8, color: K.ink }); y += 11; } }
+      const ds = wrap(hb.disclaimer, 'sans', 7, CW); need(ds.length * 10); for (const l of ds) { pg.text(l, M, y, { font: 'sans', size: 7, color: K.mute }); y += 10; } }
+    if (d.pairing) { y += 6; need(14); pg.text(`Suggested pairing: ${d.pairing}`, M, y, { font: 'sans', size: 8, color: K.mute, maxW: CW }); }
+  }));
+}
+module.exports = { dishKey, dishQuery, finaliseDishRecipe, kitchenPack, VENUE_TYPES, DESIGNS, PUB_TYPES, THEMES, cookbookHeuristic, analyseCookbook, verbatimRisk, sourcesOf, menuDishes, searchContext, applySearchContext, checkUrl, safeFetch, readCapped, extractSite, htmlToText, parseMenuText, pdfText, heuristicAnalysis, analyse, historyItems, smartSearch, SearchOpts, MenuSpec, MENU_TYPES, DIET_TAGS, courseNames, builderMessages, offlineMenu, normaliseMenu, buildMenu, menuPdf, seasonNow, jsonFrom, MAX_BYTES };

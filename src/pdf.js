@@ -46,7 +46,9 @@ function jpegInfo(b) {
 }
 
 class Page {
-  constructor(doc, w, h) { this.doc = doc; this.w = w; this.h = h; this.ops = []; this.fonts = new Set(); this.imgs = new Set(); this.gs = new Set(); }
+  constructor(doc, w, h) { this.doc = doc; this.w = w; this.h = h; this.ops = []; this.fonts = new Set(); this.imgs = new Set(); this.gs = new Set(); this.links = []; }
+  // Clickable URI link over a box (top-left origin, like the other drawing calls).
+  link(x, y, w, h, url) { if (/^https?:\/\//.test(String(url || ''))) this.links.push({ x, y, w, h, url: String(url) }); return this; }
   Y(y) { return f2(this.h - y); }
   alpha(a) { if (a >= 1) return ''; const k = 'G' + Math.round(a * 100); this.gs.add(k); this.doc.gstates.add(k); return `/${k} gs `; }
   rect(x, y, w, h, color, { alpha = 1, stroke = null, lw = 0.6 } = {}) {
@@ -95,14 +97,15 @@ class Doc {
     const imgIds = {};
     for (const im of this.images) { const id = ref(); imgIds[im.name] = id; add(id, `<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /${im.comps === 1 ? 'DeviceGray' : im.comps === 4 ? 'DeviceCMYK' : 'DeviceRGB'} /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bytes.length} >>`, im.bytes); }
     const gsIds = {}; for (const g of this.gstates) { const id = ref(); gsIds[g] = id; const a = +g.slice(1) / 100; add(id, `<< /Type /ExtGState /ca ${a} /CA ${a} >>`); }
+    const pdfStr = s => '(' + String(s).replace(/[^\x20-\x7e]/g, '').replace(/([()\\])/g, '\\$1') + ')';
     const pageIds = [];
     for (const p of this.pages) {
       const pid = ref(), cid = ref(); pageIds.push(pid); const content = te.encode(p.ops.join('\n'));
+      const annots = p.links.map(l => { const id = ref(); add(id, `<< /Type /Annot /Subtype /Link /Rect [${f2(l.x)} ${p.Y(l.y + l.h)} ${f2(l.x + l.w)} ${p.Y(l.y)}] /Border [0 0 0] /A << /S /URI /URI ${pdfStr(l.url)} >> >>`); return id; });
       add(cid, `<< /Length ${content.length} >>`, content);
       const res = `<< /Font << ${[...p.fonts].map(f => `/${f} ${fontIds[f]} 0 R`).join(' ')} >> /XObject << ${[...p.imgs].map(i => `/${i} ${imgIds[i]} 0 R`).join(' ')} >> /ExtGState << ${[...p.gs].map(g => `/${g} ${gsIds[g]} 0 R`).join(' ')} >> >>`;
-      add(pid, `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${f2(p.w)} ${f2(p.h)}] /Resources ${res} /Contents ${cid} 0 R >>`);
+      add(pid, `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${f2(p.w)} ${f2(p.h)}] /Resources ${res} /Contents ${cid} 0 R${annots.length ? ` /Annots [${annots.map(a => a + ' 0 R').join(' ')}]` : ''} >>`);
     }
-    const pdfStr = s => '(' + String(s).replace(/[^\x20-\x7e]/g, '').replace(/([()\\])/g, '\\$1') + ')';
     add(catalog, `<< /Type /Catalog /Pages ${pagesId} 0 R /ViewerPreferences << /DisplayDocTitle true >> >>`);
     add(pagesId, `<< /Type /Pages /Kids [${pageIds.map(i => i + ' 0 R').join(' ')}] /Count ${pageIds.length} >>`);
     add(info, `<< /Title ${pdfStr(this.meta.title)} /Author ${pdfStr(this.meta.author)} /Producer (AIchef.food) /CreationDate (D:${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}Z) >>`);

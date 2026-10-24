@@ -120,3 +120,16 @@ test('pubs: venue type, pub menu formats, pub dishes offline, ale pairing prompt
   for (const d of ['chalkboard', 'rustic', 'classic']) { const pdf = Buffer.from(R.menuPdf({ ...m, design: d }, fonts())).toString('latin1'); assert.ok(pdf.endsWith('%%EOF\n')); }
   assert.match(Buffer.from(R.menuPdf(m, fonts())).toString('latin1'), /0\.122 0\.149 0\.133 rg/); // chalkboard background
 });
+test('per-dish full recipes: query keeps the dish, cookbook verbatim steps dropped, Health Benefits for Medicinal, kitchen pack + clickable links', async () => {
+  const menu = await R.buildMenu(R.MenuSpec.parse({ restaurantName: 'The Lantern', courses: 2, dishesPerCourse: 1, cuisines: ['Medicinal'] }), {});
+  const q = R.dishQuery(menu, 0, 0); assert.match(q.dish, new RegExp(menu.courses[0].dishes[0].name.slice(0, 12))); assert.equal(q.limit, 1); assert.equal(q.inspirationMode, 'dioscorides'); assert.equal(R.dishQuery(menu, 9, 9), null);
+  const book = 'Fold the cream through the honey slowly until it holds a soft ribbon then chill it overnight. ';
+  const rec = { title: 'Honey fennel cake', servings: 4, totalMinutes: 60, prepMinutes: 20, cookMinutes: 40, difficulty: 'medium', allergens: ['milk', 'eggs'], ingredients: [{ name: 'fennel seeds', qty: 1, unit: 'tsp' }, { name: 'honey', qty: 100, unit: 'g' }, { name: 'eggs', qty: 2, unit: 'x' }],
+    steps: [{ text: 'Fold the cream through the honey slowly until it holds a soft ribbon then chill it overnight.' }, { text: 'Toast the fennel seeds and bake the sponge at 180C for 35 minutes.', timerMinutes: 35 }], safetyNotes: [{ text: 'Cook eggs thoroughly.' }] };
+  const r = R.finaliseDishRecipe(rec, menu, 0, 0, { cookbookText: book }); assert.equal(r.steps.length, 1); assert.match(r.steps[0].text, /Toast/); assert.equal(r.menuDish, menu.courses[0].dishes[0].name);
+  assert.ok(r.healthBenefits && r.healthBenefits.items.length, 'health benefits for medicinal'); 
+  const recipes = { '0-0': { ...r, id: 'ai-abc' } };
+  const pdf = Buffer.from(R.menuPdf(menu, fonts(), { recipes, kitchen: true, linkFor: k => recipes[k] ? 'https://aichef.food/recipe.html?id=ai-abc' : null })).toString('latin1');
+  assert.match(pdf, /\/Subtype \/Link/); assert.match(pdf, /\/URI \(https:\/\/aichef\.food\/recipe\.html\?id=ai-abc\)/);
+  const guest = Buffer.from(R.menuPdf(menu, fonts(), { recipes })).toString('latin1'); assert.ok((pdf.match(/\/Type \/Page\b/g) || []).length > (guest.match(/\/Type \/Page\b/g) || []).length); assert.doesNotMatch(guest, /\/Annots/);
+});
