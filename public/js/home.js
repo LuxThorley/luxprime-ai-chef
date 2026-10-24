@@ -1,6 +1,6 @@
 'use strict';
 (async function(){try{const {api,esc}=LP;const {plans}=await api('/api/plans');const el=document.getElementById('tier-teaser');if(!el)return;
-const blurb={free:'Try Malcolm free with 3 searches',monthly:'Unlimited recipes, favourites and history',head:'Everything, plus your monthly magazine',gastronomique:'Up to 5 people, each with their own magazine'};
+const blurb={free:'Try Malcolm free with 3 searches',monthly:'Unlimited recipes, favourites and history',head:'Everything, plus your monthly magazine',gastronomique:'Up to 5 people, each with their own magazine',restaurant:'For restaurants: website review, Menu Builder & PDF menus'};
 el.innerHTML=plans.map(p=>`<div class="card ${p.popular?'hot':''}"><h3 style="margin:0 0 6px">${esc(p.name)}</h3><div class="pr">${esc(p.price||'£0')}${p.id==='free'?'':'<small>/month</small>'}</div><p class="muted" style="margin:.6em 0 1em">${esc(blurb[p.id]||'')}</p>${p.trialDays?`<p style="margin:0;font-weight:600;color:var(--basil2)">${p.trialDays}-day free trial</p>`:''}</div>`).join('')}catch(e){}})();
 (function(){const f=document.getElementById('ask');if(!f)return;const inp=f.querySelector('#ask-in'),box=f.querySelector('#ask-chips'),hid=f.querySelector('#ask-i');let chips=[];
 const SUG=['chicken','salmon','mushrooms','eggs','pasta','rice','tomatoes','spinach','chickpeas','lemon','beef mince','halloumi'];

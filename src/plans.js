@@ -2,8 +2,9 @@
 // Plan placeholders — edit prices in Stripe and labels in .env
 // Tiers (Oct 2026): Commis Chef (free) · Chef de Partie £4.99/mo or £49/yr · Head Chef £7.99/mo or £79/yr (magazine included, 7-day
 // site-side trial for new sign-ups) · Gastronomique £11.99/mo or £119/yr (household seats). Magazine add-on £3.49/mo or £34.90/yr.
+// Restauranteur £29/mo or £290/yr (Head Chef + restaurant website analysis + Menu Builder with PDF/share; not in Gastronomique).
 // Internal ids stay 'free' / 'monthly'; legacy 'family' maps to Gastronomique.
-const PRICES = { monthly: [4.99, 49], head: [7.99, 79], gastronomique: [11.99, 119], magazine: [3.49, 34.90] };
+const PRICES = { monthly: [4.99, 49], head: [7.99, 79], gastronomique: [11.99, 119], restaurant: [29, 290], magazine: [3.49, 34.90] };
 const gbp = n => '£' + (Number.isInteger(n) ? String(n) : n.toFixed(2));
 // Annual saving vs 12 × monthly, rounded down so we never overstate it.
 const savePct = id => { const [m, y] = PRICES[id]; return Math.floor((1 - y / (12 * m)) * 100); };
@@ -16,7 +17,8 @@ function plans() {
     free: { id: 'free', name: 'Commis Chef', price: '£0', searches: +(E.FREE_SEARCHES || 3), results: 3, features: [`${+(E.FREE_SEARCHES || 3)} recipe searches`, 'Up to 3 recipes per search', 'Print & share', `Magazine available as a ${gbp(PRICES.magazine[0])} add-on`] },
     monthly: tier('monthly', 'CHEF_DE_PARTIE', 'STRIPE_PRICE_MONTHLY', null, { name: 'Chef de Partie', features: ['Unlimited AI chef searches', 'Up to 5 ranked recipes', 'Favourites & history', 'Shopping lists', 'Kids mode', `Magazine available as a ${gbp(PRICES.magazine[0])} add-on`] }),
     head: tier('head', 'HEAD_CHEF', null, null, { name: 'Head Chef', popular: true, trialDays: TRIAL_DAYS, features: ['Everything in Chef de Partie', 'AIchef.food Magazine included', 'Priority Malcolm AI', 'Monthly issue emailed to you (opt-in)', `Try it free for ${TRIAL_DAYS} days when you sign up`] }),
-    gastronomique: tier('gastronomique', 'GASTRONOMIQUE', 'STRIPE_PRICE_FAMILY', null, { name: 'Gastronomique · Lux Prime', seats: seatCap(), features: ['Everything in Head Chef', `Up to ${seatCap()} members in your household (you + ${seatCap() - 1} invited)`, 'Every member gets their own personalised magazine', 'Kids mode & family-friendly menus', 'Priority Malcolm AI'] })
+    gastronomique: tier('gastronomique', 'GASTRONOMIQUE', 'STRIPE_PRICE_FAMILY', null, { name: 'Gastronomique · Lux Prime', seats: seatCap(), features: ['Everything in Head Chef', `Up to ${seatCap()} members in your household (you + ${seatCap() - 1} invited)`, 'Every member gets their own personalised magazine', 'Kids mode & family-friendly menus', 'Priority Malcolm AI'] }),
+    restaurant: tier('restaurant', 'RESTAURANT', null, null, { name: 'Restauranteur', pro: true, features: ['Everything in Head Chef', 'Link your restaurant website — Malcolm reviews it and suggests new cuisine ideas', 'Menu Builder: à la carte, tasting, set, prix fixe, banquet & more', 'Import menus from your website or uploaded files (PDF, text)', 'Smart recipe search across your account history', 'Save, share and export immaculate PDF menus', 'For owners, managers & executive chefs'] })
   };
 }
 const magazine = () => { const E = process.env; return { price: gbp(PRICES.magazine[0]), annualPrice: gbp(PRICES.magazine[1]), savePct: savePct('magazine'), priceId: E.STRIPE_PRICE_MAGAZINE, annualPriceId: E.STRIPE_PRICE_MAGAZINE_ANNUAL }; };
@@ -33,11 +35,13 @@ const testerEmails = () => String(process.env.TESTER_EMAILS || '').split(',').ma
 const isTester = u => !!u && !!u.email && !isAdmin(u) && testerEmails().includes(String(u.email).trim().toLowerCase());
 const isPremium = u => !!u && (isAdmin(u) || isTester(u) || (u.plan !== 'free' && ['active', 'trialing'].includes(u.sub_status)));
 // Head Chef (and legacy Family) includes the magazine while the subscription is active.
-const magazineIncluded = u => !!u && (isAdmin(u) || isTester(u) || (['head', 'gastronomique', 'family'].includes(u.plan) && ['active', 'trialing'].includes(u.sub_status)));
-const planName = u => isAdmin(u) ? 'Admin' : isTester(u) ? 'Tester' : !isPremium(u) ? plans().free.name : ['gastronomique', 'family'].includes(u.plan) ? 'Gastronomique' : u.plan === 'head' ? (u._trial ? 'Head Chef (trial)' : 'Head Chef') : 'Chef de Partie';
+const magazineIncluded = u => !!u && (isAdmin(u) || isTester(u) || (['head', 'gastronomique', 'family', 'restaurant'].includes(u.plan) && ['active', 'trialing'].includes(u.sub_status)));
+const planName = u => isAdmin(u) ? 'Admin' : isTester(u) ? 'Tester' : !isPremium(u) ? plans().free.name : ['gastronomique', 'family'].includes(u.plan) ? 'Gastronomique' : u.plan === 'restaurant' ? 'Restauranteur' : u.plan === 'head' ? (u._trial ? 'Head Chef (trial)' : 'Head Chef') : 'Chef de Partie';
 // Gastronomique owners (and admin/tester, for testing) can invite household members.
 const canOwnSeats = u => !!u && !u._associateOf && (isAdmin(u) || isTester(u) || (['gastronomique', 'family'].includes(u.plan) && ['active', 'trialing'].includes(u.sub_status)));
 // Site-side 7-day Head Chef trial for new sign-ups (Stripe inactive): applied in memory while trial_ends_at is in the future.
 const trialActive = u => !!u && !!u.trial_ends_at && +u.trial_ends_at > Date.now();
 const withTrial = u => (!u || isPremium(u) || !trialActive(u)) ? u : { ...u, plan: 'head', sub_status: 'trialing', _trial: true };
-module.exports = { TRIAL_DAYS, PRICES, savePct, magazine, isMagazinePrice, trialActive, withTrial, seatCap, canOwnSeats, plans, isPremium, isAdmin, isTester, magazineIncluded, magazinePrice, planFromPrice, planName };
+// Restauranteur tools: own active Restauranteur subscription only (never household associates, never the Head Chef trial).
+const isRestaurateur = u => !!u && (isAdmin(u) || isTester(u) || (u.plan === 'restaurant' && !u._trial && ['active', 'trialing'].includes(u.sub_status)));
+module.exports = { isRestaurateur, TRIAL_DAYS, PRICES, savePct, magazine, isMagazinePrice, trialActive, withTrial, seatCap, canOwnSeats, plans, isPremium, isAdmin, isTester, magazineIncluded, magazinePrice, planFromPrice, planName };
