@@ -212,9 +212,9 @@ function historyItems({ history = [], favourites = [] }) {
   return items;
 }
 const SearchOpts = z.object({ q: z.string().trim().max(120).default(''), cuisine: z.string().trim().max(40).default(''), diet: z.string().trim().max(30).default(''), season: z.enum(['', 'now', 'spring', 'summer', 'autumn', 'winter']).default(''),
-  taste: z.enum(['', 'rich', 'fresh', 'spicy', 'sweet', 'umami']).default(''), cost: z.enum(['', 'budget', 'premium']).default(''), sort: z.enum(['appeal', 'variety', 'recent']).default('appeal'), library: z.coerce.boolean().default(true) });
+  taste: z.enum(['', 'rich', 'fresh', 'spicy', 'sweet', 'umami']).default(''), keywords: z.string().max(400).default(''), cost: z.enum(['', 'budget', 'premium']).default(''), sort: z.enum(['appeal', 'variety', 'recent']).default('appeal'), library: z.coerce.boolean().default(true) });
 function smartSearch(items, raw = {}, now = new Date()) {
-  const o = SearchOpts.parse(raw); const season = o.season === 'now' ? seasonNow(now) : o.season; const words = o.q.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+  const o = SearchOpts.parse(raw); const kws = require('./keywords').parseKeywords(o.keywords); const season = o.season === 'now' ? seasonNow(now) : o.season; const words = o.q.toLowerCase().split(/\s+/).filter(w => w.length > 1);
   let pool = items.map((it, i) => ({ ...it, _i: i }));
   if (o.library) for (const r of RECIPES) if (!pool.some(p => p.title.toLowerCase() === r.title.toLowerCase())) pool.push({ title: r.title, source: 'library', cuisine: r.cuisine, text: [r.title, r.cuisine, ...r.ingredients.map(x => x.name)].join(' '), diets: r.diets || [], minutes: r.totalMinutes, _i: 1000 + pool.length });
   const scored = pool.map(it => {
@@ -224,6 +224,7 @@ function smartSearch(items, raw = {}, now = new Date()) {
     if (o.diet) { if ((it.diets || []).includes(o.diet)) { s += 3; why.push(o.diet); } else return null; }
     if (season) { if (SEASON[season].test(t)) { s += 2; why.push(`in season (${season})`); } }
     if (o.taste && TASTE[o.taste].test(t)) { s += 2; why.push(o.taste); }
+    if (kws.length) { const ks = require('./keywords').keywordScore(kws, { title: it.title, tags: [it.cuisine], description: t }); if (ks.hits.length) { s += 2 + 6 * ks.score; why.push('keywords: ' + ks.hits.join(', ')); } }
     if (o.cost && COST[o.cost].test(t)) { s += 2; why.push(o.cost === 'budget' ? 'good GP margin' : 'premium'); }
     if (it.source === 'favourite') why.unshift('your favourite'); else if (it.source === 'history') why.unshift('from your history');
     return { title: it.title, source: it.source, cuisine: it.cuisine, protein: (t.match(PROTEIN) || [''])[0], score: s, why, _i: it._i };
@@ -248,7 +249,7 @@ const DEFAULT_COURSES = { tasting: ['Amuse-bouche', 'First course', 'Fish course
   brunch: ['To start', 'Brunch plates', 'Sweet', 'Sides', 'Pastries', 'Extras', 'Juices', 'Bakery', 'Eggs', 'Bowls', 'Grill', 'Treats'], 'pub-classics': ['Starters & nibbles', 'Pub classics', 'From the grill', 'Sides', 'Puddings', 'Cheese', 'Kids', 'Bar snacks', 'Specials', 'Sandwiches', 'Salads', 'Extras'], 'bar-snacks': ['Bar snacks', 'Small plates', 'To share', 'Sweet bites', 'Extras', 'Nuts & nibbles', 'Pickles', 'Bread', 'Cheese', 'Fried', 'Skewers', 'Dips'],
   'sunday-roast': ['Starters', 'The roasts', 'Trimmings', 'Puddings', 'Cheese', 'Kids', 'Sides', 'Extras', 'Bread', 'Soup', 'Vegetarian roast', 'Coffee'], 'specials-board': ['Today’s specials', 'Fish of the day', 'Pudding of the day', 'Extras', 'Soup', 'Pie', 'Grill', 'Sides', 'Cheese', 'Sweet', 'Snacks', 'Drinks'], 'set-lunch': ['Starters', 'Mains', 'Puddings', 'Sides', 'Cheese', 'Coffee', 'Extras', 'Soup', 'Salads', 'Grill', 'Fish', 'Sweet'], carvery: ['Starters', 'From the carvery', 'Vegetables & trimmings', 'Puddings', 'Cheese', 'Sides', 'Kids', 'Soup', 'Salads', 'Extras', 'Bread', 'Coffee'], 'sharing-platters': ['Platters to share', 'Boards', 'Sides', 'Sweet platters', 'Dips', 'Bread', 'Cheese', 'Charcuterie', 'Fish', 'Garden', 'Fried', 'Extras'],
   banquet: ['To share', 'Feast', 'Sides', 'Sweet finish', 'Cheese', 'Petits fours', 'Bread', 'Raw', 'Grill', 'Garden', 'Extras', 'Digestif'] };
-const DIET_TAGS = ['vegetarian', 'vegan', 'gluten-free', 'dairy-free', 'nut-free', 'halal'];
+const DIET_TAGS = ['vegetarian', 'vegan', 'gluten-free', 'dairy-free', 'nut-free', 'halal', 'slimming'];
 const MenuSpec = z.object({
   venueType: z.enum(Object.keys(VENUE_TYPES)).default('restaurant'), design: z.enum(Object.keys(DESIGNS)).default('classic'), name: z.string().trim().max(80).default(''), restaurantName: z.string().trim().max(80).default(''), description: z.string().trim().max(1500).default(''),
   menuType: z.enum(Object.keys(MENU_TYPES)).default('a-la-carte'), cuisines: z.array(z.string().trim().min(1).max(40)).max(6).default([]), style: z.string().trim().max(120).default(''),
@@ -256,7 +257,7 @@ const MenuSpec = z.object({
   pinned: z.array(z.string().trim().min(1).max(140)).max(40).default([]), sourceMenu: z.string().max(12000).default(''), sourceKind: z.enum(['mine', 'benchmark']).default('mine'), useCookbooks: z.boolean().default(true),
   refine: z.object({ appeal: z.enum(['broad', 'adventurous', 'classic', 'family']).default('broad'), variety: z.enum(['balanced', 'high', 'focused']).default('balanced'), taste: z.enum(['balanced', 'rich', 'fresh', 'spicy', 'umami']).default('balanced'),
     diets: z.array(z.enum(DIET_TAGS)).max(6).default([]), season: z.enum(['now', 'spring', 'summer', 'autumn', 'winter', 'any']).default('now'), cost: z.enum(['any', 'budget', 'mid', 'premium']).default('any'),
-    prices: z.boolean().default(true), pairings: z.boolean().default(false), personal: z.string().trim().max(400).default('') }).default({})
+    prices: z.boolean().default(true), pairings: z.boolean().default(false), keywords: z.string().max(400).default(''), personal: z.string().trim().max(400).default('') }).default({})
 });
 function courseNames(spec) { const pool = DEFAULT_COURSES[spec.menuType] || DEFAULT_COURSES.default; return Array.from({ length: spec.courses }, (_, i) => spec.courseNames[i] || pool[i] || `Course ${i + 1}`); }
 const perCourse = spec => ['tasting', 'set', 'prix-fixe', 'private-dining'].includes(spec.menuType) && spec.dishesPerCourse > 2 ? spec.dishesPerCourse : spec.dishesPerCourse;
@@ -272,7 +273,7 @@ function builderMessages(spec, ctx, persona) {
       spec.pinned.length && `Must feature (refine and elevate) these dishes from the chef’s account history: ${spec.pinned.join('; ')}. Mark them fromHistory true.`,
       ctx.cookbooks && ctx.cookbooks.length && `Cookbook inspiration — borrow style, techniques, pairings and structure only; every dish must be original; never reproduce recipes, dish names or text from these books: ${ctx.cookbooks.map(cookbookBrief).join(' | ')}.`,
       ctx.analysis && `Website analysis: ${ctx.analysis.summary} Ideas: ${(ctx.analysis.ideas || []).slice(0, 3).join(' / ')}`,
-      spec.sourceMenu && (spec.sourceKind === 'benchmark' ? `Benchmark menu (a competitor or inspiration, NOT the client’s): use it only for inspiration and contrast — create original dishes, never reuse its dish names or descriptions verbatim:\n${spec.sourceMenu.slice(0, 4000)}` : `Existing/example menu to explore, develop and elaborate on (keep its identity, raise its ambition):\n${spec.sourceMenu.slice(0, 4000)}`), r.personal && `Personal brief: ${r.personal}`].filter(Boolean).join('\n') }];
+      spec.sourceMenu && (spec.sourceKind === 'benchmark' ? `Benchmark menu (a competitor or inspiration, NOT the client’s): use it only for inspiration and contrast — create original dishes, never reuse its dish names or descriptions verbatim:\n${spec.sourceMenu.slice(0, 4000)}` : `Existing/example menu to explore, develop and elaborate on (keep its identity, raise its ambition):\n${spec.sourceMenu.slice(0, 4000)}`), r.keywords && require('./keywords').promptRule(require('./keywords').parseKeywords(r.keywords)), require('./keywords').cuisineRules(spec.cuisines).join(' '), r.diets.includes('slimming') && require('./keywords').SLIMMING_RULE, r.personal && `Personal brief: ${r.personal}`].filter(Boolean).join('\n') }];
 }
 // Offline composer: deterministic, uses history + library + course-appropriate templates.
 const TPL = {
@@ -333,7 +334,7 @@ function dishQuery(menu, ci, di) {
   const c = menu.courses[ci]; const d = c && c.dishes[di]; if (!d) return null;
   const med = (menu.cuisines || []).some(x => /medicinal/i.test(x)); const cz = (menu.cuisines || []).filter(Boolean).slice(0, 3);
   return { include: [], exclude: [], dish: `${d.name}${d.description ? ' — ' + d.description : ''}. A complete, professional recipe for this exact ${c.name.toLowerCase()} dish on a ${String(menu.menuTypeLabel || 'restaurant').toLowerCase()} menu at ${menu.restaurantName || 'a ' + (menu.venueLabel || 'restaurant').toLowerCase()}: keep the dish name, components and garnish; include mise en place and timings.`.slice(0, 1000),
-    maxMinutes: 300, difficulty: null, servings: 4, diets: (d.tags || []).filter(t => ['vegetarian', 'vegan', 'gluten-free', 'dairy-free', 'nut-free', 'halal'].includes(t)), excludeAllergens: [], cuisines: cz, cuisine: cz.length > 1 ? cz.join(' + ') + ' fusion' : (cz[0] || 'any'),
+    maxMinutes: 300, difficulty: null, servings: 4, diets: (d.tags || []).filter(t => ['vegetarian', 'vegan', 'gluten-free', 'dairy-free', 'nut-free', 'halal', 'slimming'].includes(t)), excludeAllergens: [], cuisines: cz, cuisine: cz.length > 1 ? cz.join(' + ') + ' fusion' : (cz[0] || 'any'),
     inspirationMode: med ? 'dioscorides' : 'blend', kidsMode: false, limit: 1, brief: { raw: '', constraints: {}, question: null } };
 }
 // Clean a generated recipe for the menu: keep the menu's dish name, guard against cookbook verbatim text, attach Health Benefits where relevant.
@@ -346,7 +347,7 @@ function finaliseDishRecipe(r, menu, ci, di, { cookbookText = '', approximate = 
 
 // ---------- PDF ----------
 const PC = { paper: '#fbf8f2', ink: '#1d1a17', gold: '#b08a45', gold2: '#d8bd84', mute: '#7a7065', rule: '#d9cdb8', copper: '#a8683e', night: '#16171b' };
-const TAG = { vegetarian: 'V', vegan: 'VG', 'gluten-free': 'GF', 'dairy-free': 'DF', 'nut-free': 'NF', halal: 'H' };
+const TAG = { vegetarian: 'V', vegan: 'VG', 'gluten-free': 'GF', 'dairy-free': 'DF', 'nut-free': 'NF', halal: 'H', slimming: 'SL' };
 const THEMES = { classic: { ...PC, desc: '#5b5249', intro: '#4a4239', head: 'serifB', title: 'serifI', body: 'serifI' },
   chalkboard: { paper: '#1f2622', ink: '#f3f0e6', gold: '#e9c46a', gold2: '#7f8c84', mute: '#b9c2bb', rule: '#4b5750', copper: '#f4a261', desc: '#d8ddd6', intro: '#e6e9e2', head: 'sansB', title: 'serifB', body: 'sans', chalk: true },
   rustic: { paper: '#efe3cc', ink: '#3b2a1a', gold: '#8a5a2b', gold2: '#b8915f', mute: '#6e5a45', rule: '#c9ad85', copper: '#7a3e1d', desc: '#5a4632', intro: '#4a3826', head: 'serifB', title: 'serifB', body: 'serif', rustic: true } };

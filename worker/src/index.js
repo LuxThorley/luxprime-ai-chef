@@ -22,15 +22,16 @@ import dioscorides from '../../src/dioscorides.js';
 import verifyMod from '../../src/verify.js';
 import mailer from '../../src/mailer.js';
 import restaurant from '../../src/restaurant.js';
+import kwMod from '../../src/keywords.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
-const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
+const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal','slimming'];
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
   include: z.array(tag).max(20).default([]), exclude: z.array(tag).max(20).default([]),
   dish: z.string().trim().max(1000).optional().default(''), inspirationMode: z.enum(['escoffier','blend','malcolm','dioscorides']).default('blend'), briefIgnore: z.array(z.string().max(20)).max(12).default([]), skipClarify: z.boolean().optional(), maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'), servings: z.coerce.number().int().min(1).max(12).default(2),
-  diets: z.array(z.enum(DIETS)).max(6).default([]), excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
+  diets: z.array(z.enum(DIETS)).max(7).default([]), keywords: z.union([z.string().max(400), z.array(z.string().max(40)).max(20)]).optional().default(''), excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
   cuisine: z.string().trim().max(40).default('any'), cuisines: z.array(z.string().trim().min(1).max(40).regex(/^[\p{L} '\-&()]+$/u)).max(8).default([]), kidsMode: z.boolean().default(false), useRestaurant: z.boolean().optional(),
   escoffier: z.string().regex(/^\d{1,4}[a-z]?$/).optional()
 }).refine(q => q.include.length || q.dish, { message: 'Add at least one ingredient or describe a dish' });
@@ -176,14 +177,14 @@ app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
 app.delete('/api/me', needAuth, async c => { if (isTester(c.get('user'))) return c.json({ error: 'The shared test account can’t be deleted from the site' }, 403); await db(c).prepare('DELETE FROM users WHERE id=?').bind(c.get('user').id).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/health', c => c.json({ ok: true, runtime: 'cloudflare-workers', ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!c.env.STRIPE_SECRET_KEY }));
 app.get('/api/plans', c => { const s = !!c.env.STRIPE_SECRET_KEY; const m = plansMod.magazine(); return c.json({ plans: Object.values(plans()).map(({ priceId, annualPriceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(s && priceId), availableAnnual: p.id === 'free' || !!(s && annualPriceId) })), magazine: { price: m.price, annualPrice: m.annualPrice, savePct: m.savePct } }); });
-app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...RECIPES.map(r => r.cuisine), ...community.FUSION_CUISINES, 'Medicinal'])].sort()] }));
+app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...RECIPES.map(r => r.cuisine), ...community.FUSION_CUISINES, 'Medicinal', ...Object.keys(kwMod.STYLE_CUISINES)])].sort()] }));
 
 // Core search, shared by /api/search and Ask Malcolm regenerations. Returns [status, payload].
 async function doSearch(c, u, data) {
   const prem = isPremium(u), pl = plans();
   if (!prem && u.searches_used >= pl.free.searches) return [402, { error: `You've used your ${pl.free.searches} free searches — choose a plan to keep cooking`, upgrade: '/pricing.html' }];
   const cuisines = community.normCuisines(data.cuisines, data.cuisine);
-  const q = { ...data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: data.difficulty === 'any' ? null : data.difficulty, limit: prem ? 5 : pl.free.results };
+  const q = { ...data, cuisines, cuisine: cuisines.length > 1 ? cuisines.join(' + ') + ' fusion' : (cuisines[0] || 'any'), difficulty: data.difficulty === 'any' ? null : data.difficulty, limit: prem ? 5 : pl.free.results, keywords: kwMod.parseKeywords(data.keywords) };
   const brief = briefMod.without(briefMod.parseBrief(data.dish), data.briefIgnore); Object.assign(q, briefMod.applyHints(q, brief)); q.brief = { raw: brief.raw, constraints: Object.fromEntries(Object.entries(brief.hints).map(([k, v]) => [k, v.value])), question: brief.question };
   let restoUsed = null; // Restauranteur: blend the linked restaurant profile when the member's toggle is on (default off)
   if (plansMod.isRestaurateur(u) && c.env.IMAGES) { try { const prof = await kvJ(c, RK.profile(u)); const want = data.useRestaurant ?? !!(prof && prof.useInSearch); const ctx = want && prof ? restaurant.searchContext({ ...prof, useInSearch: true }) : null; if (ctx) { Object.assign(q, restaurant.applySearchContext(q, ctx)); restoUsed = ctx.name; } } catch (e) { console.error('resto ctx', e && e.message); } }
@@ -209,7 +210,7 @@ async function doSearch(c, u, data) {
     db(c).prepare('UPDATE users SET searches_used = searches_used + ? WHERE id=?').bind(prem ? 0 : 1, u.id), // Commis Chef allowance only counts non-paid, non-trial searches
     db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify(data), recipes.map(r => r.title).join(' · '))]);
   const fresh = await members.effectiveUser(db(c), await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first());
-  return [200, { source: out.source, answer: answer || out.answer || null, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, inspirationMode: q.inspirationMode, restaurantContext: restoUsed, understood: briefMod.summary(brief), question: brief.question, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) }];
+  return [200, { source: out.source, answer: answer || out.answer || null, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, inspirationMode: q.inspirationMode, restaurantContext: restoUsed, keywords: q.keywords, ...(q.diets.includes('slimming') ? { slimmingNote: kwMod.SLIMMING_NOTE } : {}), understood: briefMod.summary(brief), question: brief.question, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) }];
 }
 app.post('/api/chat', rl('chat-ip', 30, 300), needAuth, async c => {
   const p = chat.ChatRequest.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user'); const req = p.data;
@@ -588,7 +589,7 @@ app.get('/m/menu/:tok/pdf', async c => { const r = await sharedMenu(c); if (!r) 
   return new Response(restaurant.menuPdf(r.menu, await loadMenuFonts(c), r.shareRecipes !== false ? { linkFor: recipeLink(c, r) } : {}), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${pdfName(r.menu)}"`, 'Cache-Control': 'public, max-age=300', 'X-Robots-Tag': 'noindex' } }); });
 app.get('/m/menu/:tok', async c => {
   const r = await sharedMenu(c); if (!r) return c.html(unsubPage('This menu is no longer shared.').replace('Email preferences', 'Menu not found').replace(/<p class="muted"[\s\S]*?<\/p>/, ''), 404);
-  const m = r.menu; const tags = { vegetarian: 'V', vegan: 'VG', 'gluten-free': 'GF', 'dairy-free': 'DF', 'nut-free': 'NF', halal: 'H' };
+  const m = r.menu; const tags = { vegetarian: 'V', vegan: 'VG', 'gluten-free': 'GF', 'dairy-free': 'DF', 'nut-free': 'NF', halal: 'H', slimming: 'SL' };
   const link = r.shareRecipes !== false ? recipeLink(c, r) : () => null;
   const courses = m.courses.map((co, ci) => `<section class="mc"><h2>${escH(co.name)}</h2>${co.dishes.map((d, di) => `<div class="md"><h3>${link(restaurant.dishKey(ci, di)) ? `<a href="${escH(link(restaurant.dishKey(ci, di)))}" style="color:inherit">${escH(d.name)}</a>` : escH(d.name)}${d.tags.length ? ` <small>${d.tags.map(t => tags[t]).join(' ')}</small>` : ''}${d.price != null ? `<span class="mp">${escH(d.price)}</span>` : ''}</h3>${d.description ? `<p>${escH(d.description)}</p>` : ''}${d.pairing ? `<p class="pair">To drink: ${escH(d.pairing)}</p>` : ''}</div>`).join('')}</section>`).join('');
   return c.html(`<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${escH(m.title)} · ${escH(m.restaurantName || 'Menu')}</title><meta property="og:title" content="${escH((m.restaurantName ? m.restaurantName + ' — ' : '') + m.title)}"><meta property="og:description" content="${escH(m.intro || 'A menu composed with Malcolm on AIchef.food')}"><meta property="og:image" content="${escH(appUrl(c))}/img/brand/og.png"><link rel="stylesheet" href="/css/styles.css"></head>

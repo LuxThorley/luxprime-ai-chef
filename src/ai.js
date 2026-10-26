@@ -1,4 +1,5 @@
 'use strict';
+const K = require('./keywords');
 // Provider-agnostic AI chef layer with strict JSON schema validation, retry and offline fallback.
 const { z } = require('zod');
 const { rank, shoppingList } = require('./ranker');
@@ -64,6 +65,9 @@ function buildUserPrompt(q, refs) {
     ...(q.inspiration && (q.inspiration.topRated || []).length ? { communityFavourites: q.inspiration.topRated.map(t => `${t.title} (${t.cuisine || 'any'}, ${t.avg}★ from ${t.count})`), inspirationRule: 'Optional loose inspiration only: members rate these highly. Never copy them; the request above always wins.' } : {}),
     ...(q.inspiration && (q.inspiration.likes || []).length ? { memberLikes: q.inspiration.likes } : {}),
     inspirationMode: q.inspirationMode || 'blend',
+    ...(q.keywords && q.keywords.length ? { keywords: q.keywords, keywordRule: K.promptRule(q.keywords) } : {}),
+    ...(K.cuisineRules(q.cuisines).length ? { styleCuisines: K.cuisineRules(q.cuisines) } : {}),
+    ...((q.diets || []).includes('slimming') ? { slimming: K.SLIMMING_RULE } : {}),
     ...(q.brief && q.brief.raw ? { brief: q.brief } : {})
   });
 }

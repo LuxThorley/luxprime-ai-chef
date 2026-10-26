@@ -8,6 +8,7 @@
 <label for="dish">…or tell Malcolm anything</label>
 <p class="muted brief-help">Flavours, memories, moods, questions, numbers — calories, protein, budget, time, servings, spice 1–10.</p>
 <div class="brief-wrap"><textarea id="dish" maxlength="1000" rows="3" aria-describedby="briefCount" placeholder="e.g. smoky, sticky, sharp — under 600 kcal, £10, for 4"></textarea><span id="briefCount" class="brief-count" aria-live="polite">0 / 1000</span></div>
+<label for="kw">Keywords <small class="muted">(optional, separate with commas)</small></label><input type="text" id="kw" maxlength="400" placeholder="e.g. snack, romantic, magical, quick, cakes, Christmas" aria-describedby="kwHelp"><p class="muted" id="kwHelp" style="font-size:.8rem;margin:.3em 0 0">Moods, occasions or styles that Malcolm should weave in. Separate them with commas.</p>
 <div class="brief-prompts" id="briefPrompts" aria-label="Inspiration prompts"></div>
 <div class="understood" id="understood" hidden aria-live="polite"></div>
 <fieldset class="insp"><legend>Inspiration</legend><div class="seg seg-insp" role="radiogroup"><label><input type="radio" name="insp" value="escoffier"><span>Escoffier</span></label><label><input type="radio" name="insp" value="blend" checked><span>Malcolm &amp; Escoffier</span></label><label><input type="radio" name="insp" value="malcolm"><span>Malcolm AI Chef only</span></label><label><input type="radio" name="insp" value="dioscorides"><span>Dioscorides</span></label></div><p class="muted insp-note" id="inspNote"></p></fieldset></div>

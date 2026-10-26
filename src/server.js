@@ -8,7 +8,7 @@ const { open } = require('./db'); const verifyMod = require('./verify'); const c
 const { plans, isPremium, isAdmin, isTester } = require('./plans'); const images = require('./images');
 const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14, RECIPES } = require('./recipes'); const community = require('./community'); const CR = require('./community-routes'); const briefMod = require('./brief');
 
-const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal'];
+const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal','slimming'];
 const tag = z.string().trim().min(1).max(40).regex(/^[\p{L}\p{N} '\-&]+$/u, 'letters, numbers, spaces only');
 const SearchSchema = z.object({
   include: z.array(tag).max(20).default([]), exclude: z.array(tag).max(20).default([]),
@@ -16,7 +16,7 @@ const SearchSchema = z.object({
   maxMinutes: z.coerce.number().int().min(5).max(480).default(60),
   difficulty: z.enum(['easy','medium','hard','any']).default('any'),
   servings: z.coerce.number().int().min(1).max(12).default(2),
-  diets: z.array(z.enum(DIETS)).max(6).default([]),
+  diets: z.array(z.enum(DIETS)).max(7).default([]),
   excludeAllergens: z.array(z.enum(UK14)).max(14).default([]),
   cuisine: z.string().trim().max(40).default('any'), cuisines: z.array(z.string().trim().min(1).max(40).regex(/^[\p{L} '\-&()]+$/u)).max(8).default([]), kidsMode: z.boolean().default(false),
   escoffier: z.string().regex(/^\d{1,4}[a-z]?$/).optional()

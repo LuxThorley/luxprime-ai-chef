@@ -18,14 +18,14 @@ const ChatRequest = z.object({
   recipe: z.object({ title: z.string().max(140), ingredients: z.array(z.string().max(200)).max(40).default([]), steps: z.array(z.string().max(600)).max(30).default([]), totalMinutes: z.number().optional(), servings: z.number().optional() }).optional()
 });
 const Changes = z.object({
-  addDiets: z.array(z.string().max(30)).max(6).optional(), exclude: z.array(z.string().max(40)).max(10).optional(), include: z.array(z.string().max(40)).max(10).optional(),
+  addDiets: z.array(z.string().max(30)).max(6).optional(), addKeywords: z.array(z.string().max(40)).max(12).optional(), exclude: z.array(z.string().max(40)).max(10).optional(), include: z.array(z.string().max(40)).max(10).optional(),
   maxMinutes: z.number().int().min(5).max(480).nullable().optional(), servings: z.number().int().min(1).max(12).nullable().optional(),
   spice: z.number().int().min(0).max(10).nullable().optional(), budgetGBP: z.number().min(1).max(500).nullable().optional(), kcalMax: z.number().min(100).max(3000).nullable().optional(),
   difficulty: z.enum(['easy', 'medium', 'hard']).nullable().optional(), note: z.string().max(200).nullable().optional()
 }).partial();
 const ChatOut = z.object({ reply: z.string().min(1).max(1500), action: z.enum(['answer', 'regenerate', 'clarify']).default('answer'), changes: Changes.default({}), suggestions: z.array(z.string().max(60)).max(5).default([]) });
 
-const DIETS = { vegan: 'vegan', vegetarian: 'vegetarian', veggie: 'vegetarian', 'gluten free': 'gluten-free', 'gluten-free': 'gluten-free', coeliac: 'gluten-free', 'dairy free': 'dairy-free', 'dairy-free': 'dairy-free', 'no dairy': 'dairy-free', 'lactose': 'dairy-free', 'nut free': 'nut-free', 'nut-free': 'nut-free', 'no nuts': 'nut-free', halal: 'halal' };
+const DIETS = { slimming: 'slimming', 'weight loss': 'slimming', 'lose weight': 'slimming', vegan: 'vegan', vegetarian: 'vegetarian', veggie: 'vegetarian', 'gluten free': 'gluten-free', 'gluten-free': 'gluten-free', coeliac: 'gluten-free', 'dairy free': 'dairy-free', 'dairy-free': 'dairy-free', 'no dairy': 'dairy-free', 'lactose': 'dairy-free', 'nut free': 'nut-free', 'nut-free': 'nut-free', 'no nuts': 'nut-free', halal: 'halal' };
 const isQuestion = s => /\?\s*$|^(what|which|how|why|when|can|could|should|is|are|do|does|would|will|any)\b/i.test(String(s).trim());
 
 // Deterministic understanding of common refinements; used offline and merged with the LLM's view.
@@ -33,6 +33,7 @@ function parseRefinement(message) {
   const m = String(message || '').toLowerCase(); const ch = {}; const b = briefMod.parseBrief(message);
   const diets = new Set(); for (const [k, v] of Object.entries(DIETS)) if (m.includes(k)) diets.add(v); if (/make it vegan|go vegan/.test(m)) diets.add('vegan');
   if (diets.size) ch.addDiets = [...diets];
+  { const km = m.match(/\b(?:more|make it(?: more)?|keywords?:?|add keywords?)\s+([a-z][a-z ,\-]{2,60}?)(?:[.!?]|$)/); if (km && !/^(spic|heat|cheap|quick|fast|filling|protein|veg|time)/.test(km[1])) { const kws = require('./keywords').parseKeywords(km[1]).filter(k => !Object.keys(DIETS).includes(k) && !/vegan|vegetarian/.test(k)); if (kws.length) ch.addKeywords = kws; } }
   const ex = []; const swap = m.match(/\b(?:swap|replace|lose|ditch|without|skip|no)\s+(?:the\s+)?([a-z][a-z \-]{1,30}?)(?:\s+(?:for|with)\b|[,.!?]|$)/);
   if (swap && !/^(dairy|nuts?|meat|gluten)$/.test(swap[1].trim())) ex.push(swap[1].trim());
   const inc = m.match(/\b(?:swap|replace)\s+(?:the\s+)?[a-z \-]{1,30}?\s+(?:for|with)\s+(?:some\s+)?([a-z][a-z \-]{1,30}?)(?:[,.!?]|$)/); if (inc) ch.include = [inc[1].trim()];
@@ -53,6 +54,7 @@ function applyChanges(q, ch = {}) {
   const n = { ...q, diets: [...new Set([...(q.diets || []), ...(ch.addDiets || []).filter(d => Object.values(DIETS).includes(d))])], exclude: [...new Set([...(q.exclude || []), ...(ch.exclude || [])])].slice(0, 20) };
   if (ch.include && ch.include.length) n.include = [...new Set([...(q.include || []), ...ch.include])].filter(x => !n.exclude.includes(x)).slice(0, 20);
   else n.include = (q.include || []).filter(x => !n.exclude.includes(x));
+  if (ch.addKeywords && ch.addKeywords.length) n.keywords = [...new Set([...(q.keywords || []), ...ch.addKeywords])].slice(0, 12); else if (q.keywords) n.keywords = q.keywords;
   if (ch.maxMinutes) n.maxMinutes = Math.min(q.maxMinutes || 480, ch.maxMinutes);
   if (ch.servings) n.servings = ch.servings; if (ch.difficulty) n.difficulty = ch.difficulty;
   const extra = [ch.spice != null && `spice ${ch.spice}/10`, ch.budgetGBP && `under £${ch.budgetGBP}`, ch.kcalMax && `under ${ch.kcalMax} kcal`, ch.note].filter(Boolean);
@@ -79,7 +81,7 @@ You are chatting with a home cook ${recipe ? 'about ONE recipe they are looking 
 Return ONLY JSON: {"reply": string, "action": "answer"|"regenerate"|"clarify", "changes": {"addDiets":[...],"exclude":[...],"include":[...],"maxMinutes":int|null,"servings":int|null,"spice":0-10|null,"budgetGBP":number|null,"kcalMax":number|null,"difficulty":"easy|medium|hard"|null,"note":string|null}, "suggestions": [up to 4 short follow-ups the cook might tap]}
 - "reply": talk like a real chef in conversation: answer the actual question directly and specifically first (techniques, swaps, timings, wine/drink pairings, why something works), 1-5 sentences, no generic blessings.
 ${recipe ? '- Answer about this recipe only; action is always "answer". Give concrete quantities, temperatures and timings where useful.' : `- Use action "regenerate" when the cook wants different or adjusted recipes (spicier, no dairy, cheaper, vegan, swap the fish, quicker…) and fill "changes"; your reply then briefly says what you are changing. Use "answer" for questions that need no new recipes (e.g. "what wine?"). Use "clarify" only if the message is genuinely ambiguous, with one short question.`}
-- Keep the cook's existing constraints (inspiration mode, cuisines, diets, exclusions) unless they ask otherwise. Allowed diets: vegetarian, vegan, gluten-free, dairy-free, nut-free, halal.`;
+- Keep the cook's existing constraints (inspiration mode, cuisines, diets, keywords, exclusions) unless they ask otherwise. Allowed diets: slimming, vegetarian, vegan, gluten-free, dairy-free, nut-free, halal.`;
   const ctx = recipe ? { recipe } : { searchContext: summariseContext(context), currentRecipes: recipes.map(r => r.title) };
   const msgs = [{ role: 'system', content: sys }, { role: 'user', content: 'Context (JSON): ' + JSON.stringify(ctx) }];
   for (const t of history.slice(-LIMITS.maxHistory)) msgs.push({ role: t.role === 'user' ? 'user' : 'assistant', content: t.role === 'user' ? t.text : JSON.stringify({ reply: t.text }) });

@@ -63,6 +63,7 @@ function expand(r) {
     'gluten-free': !allergens.includes('cereals containing gluten'),
     'dairy-free': !allergens.includes('milk'),
     'nut-free': !allergens.includes('peanuts') && !allergens.includes('tree nuts'),
+    slimming: r.n[0] <= 550 && r.n[1] >= 15, // lower-calorie, decent protein (see src/keywords.js)
     halal: !PORK.test(all) // meat must also be halal-certified: flagged in notes
   };
   const steps = r.st.map((text, idx) => {

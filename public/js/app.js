@@ -15,7 +15,7 @@
     $('#czAny').onclick=()=>{czSel.clear();box.querySelectorAll('#czList input').forEach(i=>i.checked=false);sum()};
     $('#czQ').oninput=e=>{const t=e.target.value.toLowerCase();box.querySelectorAll('#czList label').forEach(l=>l.hidden=t&&!l.textContent.toLowerCase().includes(t))};
     window.LPsetCuisines=list=>{czSel.clear();box.querySelectorAll('#czList input').forEach(i=>{i.checked=list.includes(i.value);if(i.checked)czSel.add(i.value)});sum()};sum()}
-  $('#diets').innerHTML=opts.diets.map(d=>`<label><input type="checkbox" value="${esc(d)}"><span>${esc(d)}</span></label>`).join('');
+  $('#diets').innerHTML=opts.diets.map(d=>`<label><input type="checkbox" value="${esc(d)}"><span>${esc(d==='slimming'?'slimming / weight loss':d)}</span></label>`).join('');
   const PK=()=>'lp_prefs_'+(me&&me.id||'guest');let serverPrefs=null;
   const prefsOf=b=>({diets:b.diets,servings:b.servings,cuisines:b.cuisines,difficulty:b.difficulty,maxMinutes:b.maxMinutes,kidsMode:b.kidsMode,inspirationMode:b.inspirationMode,recent:recent()});
   const savePrefs=b=>{const p=prefsOf(b);try{localStorage.setItem(PK(),JSON.stringify(p))}catch{}if(me)api('/api/prefs',{method:'PUT',body:p}).catch(()=>{})};
@@ -58,6 +58,8 @@
       lastRecipes=(d.recipes||[]).map(r=>({title:r.title,id:r.id}));
       const h=document.createElement('div');h.className='row no-print';h.style.marginBottom='14px';h.innerHTML=`<p class="muted" style="margin:0">${d.recipes.length} recipe${d.recipes.length===1?'':'s'} · ${d.source==='offline'?'AIchef.food curated library':'Malcolm AI'} <br><small>${esc(d.disclaimer)}</small></p>`;res.appendChild(h);
       if(d.aiBusy){const n=document.createElement('div');n.className='note no-print';n.setAttribute('role','status');n.style.marginBottom='14px';n.innerHTML=`<strong>Malcolm AI is busy right now, so these are picks from our recipe library.</strong> Please try again in a minute for fresh AI recipes.${d.fallbackReason&&me&&me.admin?`<br><small class="muted">Admin · reason: ${esc(d.fallbackReason)}</small>`:''}`;res.appendChild(n)}
+      if(d.keywords&&d.keywords.length){const kn=document.createElement('p');kn.className='note no-print';kn.style.marginBottom='14px';kn.textContent=`🔑 Keywords used: ${d.keywords.join(', ')}`;res.appendChild(kn)}
+      if(d.slimmingNote){const sn=document.createElement('p');sn.className='note no-print';sn.style.marginBottom='14px';sn.textContent=`⚖️ Slimming: kcal per serving is shown on each recipe (estimates). ${d.slimmingNote}`;res.appendChild(sn)}
       if(d.restaurantContext){const rn=document.createElement('p');rn.className='note no-print';rn.style.marginBottom='14px';rn.textContent=`🍽️ Tailored using your linked sources (${d.restaurantContext}): Malcolm blended their cuisine, style and menus into this search, using benchmarks for inspiration only. Turn off “Use my linked sources” to search without them.`;res.appendChild(rn)}
       {const mb=document.createElement('div');mb.className='no-print res-meta';mb.innerHTML=`<span class="mode-badge mode-${esc(d.inspirationMode||'blend')}">${esc((INSP[d.inspirationMode]||INSP.blend).badge)}</span>`+((d.inspirationMode!=='dioscorides'&&(d.recipes||[]).some(r=>r.medicinalNote))?`<span class="mode-badge mode-dioscorides">🌿 Medicinal · Dioscorides</span>`:'')+((d.understood||[]).length?`<span class="muted" style="font-size:.85rem">Malcolm understood:</span>`+d.understood.map(u=>`<span class="uchip static">${esc(u.label)}</span>`).join(''):'');res.appendChild(mb)}
       if(d.answer){const a=document.createElement('div');a.className='card malcolm-answer';a.setAttribute('role','status');a.innerHTML=`<p class="answer-k">👨‍🍳 Malcolm’s answer</p><p class="answer-t">${esc(d.answer)}</p>`;res.appendChild(a)}
@@ -72,7 +74,7 @@
   $('#search').onsubmit=async e=>{e.preventDefault();$('#formErr').textContent='';
     const ii=$('#inc-input'),ei=$('#exc-input');if(ii.value)inc.add(ii.value);if(ei.value)exc.add(ei.value);
     if(!me){$('#authDlg').showModal();return}
-    const body={include:tags.inc,exclude:tags.exc,dish:$('#dish').value.trim(),maxMinutes:+$('#time').value,difficulty:document.querySelector('[name=diff]:checked').value,servings:+$('#servings').value||2,cuisine:'any',cuisines:[...czSel],diets:[...document.querySelectorAll('#diets input:checked')].map(i=>i.value),kidsMode:$('#kids').checked,...(document.getElementById('useResto')?{useRestaurant:$('#useResto').checked}:{}),inspirationMode:insp(),briefIgnore:[...briefIgnore],...(escNo?{escoffier:escNo}:{})};
+    const body={include:tags.inc,exclude:tags.exc,dish:$('#dish').value.trim(),maxMinutes:+$('#time').value,difficulty:document.querySelector('[name=diff]:checked').value,servings:+$('#servings').value||2,cuisine:'any',cuisines:[...czSel],diets:[...document.querySelectorAll('#diets input:checked')].map(i=>i.value),kidsMode:$('#kids').checked,keywords:($('#kw')||{value:''}).value.trim(),...(document.getElementById('useResto')?{useRestaurant:$('#useResto').checked}:{}),inspirationMode:insp(),briefIgnore:[...briefIgnore],...(escNo?{escoffier:escNo}:{})};
     if(!body.include.length&&!body.dish){$('#formErr').textContent='Add at least one ingredient or describe a dish.';show(1);return}
     pushRecent(body);savePrefs(body);drawRecent();
     const res=$('#results');res.setAttribute('aria-busy','true');const stop=LP.cooking(res,$('#go'));skeleton(res);

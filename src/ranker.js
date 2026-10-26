@@ -1,6 +1,7 @@
 'use strict';
 // Deterministic offline ranking engine: ingredient overlap, dish text match, time, difficulty, diet, cuisine, kids.
 const { RECIPES, scale } = require('./recipes');
+const K = require('./keywords');
 const DIFF = { easy: 1, medium: 2, hard: 3 };
 const PANTRY = ['salt','pepper','water','olive oil','vegetable oil','sugar'];
 const norm = s => String(s || '').toLowerCase().trim().replace(/s\b/g, '');
@@ -49,6 +50,13 @@ function rank(q, { limit = 5, pool = RECIPES } = {}) {
     if (diff) { const d = Math.abs(DIFF[r.difficulty] - DIFF[diff]); score += [8, 3, 0][d]; if (!d) why.push(`${r.difficulty} difficulty as requested`); } else score += 5;
     // cuisine (0-5)
     { const cs = (q.cuisines && q.cuisines.length ? q.cuisines : (q.cuisine && q.cuisine !== 'any' ? [q.cuisine] : [])).map(norm); if (cs.length && cs.includes(norm(r.cuisine))) { score += 5; why.push(`${r.cuisine} cuisine`); } }
+    // keywords (0-20; 'quick' also rewards short cook times)
+    if (q.keywords && q.keywords.length) { const ks = K.keywordScore(q.keywords, { title: r.title, tags: [...r.tags, r.cuisine], description: (r.steps || []).map(x => x.text).join(' '), ingredients: r.ingredients.map(i => i.name) });
+      let s = 20 * ks.score; if (q.keywords.some(k => K.expand(k).includes('quick')) && r.totalMinutes <= 30) { s += 6; ks.hits.includes('quick') || ks.hits.push('quick'); }
+      if (s) { score += s; why.push(`matches your keywords (${ks.hits.join(', ')})`); } }
+    // style cuisines: Haute Cuisine / Family / Experimental (0-8)
+    { const st = (q.cuisines || []).filter(K.isStyleCuisine); for (const c of st) if (K.STYLE_CUISINES[c].match(r)) { score += 8; why.push(`${c} style`); } }
+    if (diets.includes('slimming')) why.push(`about ${r.nutritionPerServing.kcal} kcal per serving`);
     // kids (0-5)
     if (q.kidsMode) { if (r.kidFriendly) { score += 5; why.push('kid-friendly'); } else score -= 5; }
     if (diets.length) why.push(`suits ${diets.join(', ')}`);
