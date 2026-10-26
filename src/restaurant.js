@@ -349,6 +349,7 @@ function finaliseDishRecipe(r, menu, ci, di, { cookbookText = '', approximate = 
 }
 
 // ---------- PDF ----------
+const hslHex = hsl => { const m = String(hsl).match(/hsl\((\d+)\s+(\d+)%\s+(\d+)%/); if (!m) return '#888888'; const h = +m[1] / 360, sa = +m[2] / 100, l = +m[3] / 100; const q = l < 0.5 ? l * (1 + sa) : l + sa - l * sa, p = 2 * l - q; const t = x => { x = (x + 1) % 1; return x < 1 / 6 ? p + (q - p) * 6 * x : x < 1 / 2 ? q : x < 2 / 3 ? p + (q - p) * (2 / 3 - x) * 6 : p; }; return '#' + [t(h + 1 / 3), t(h), t(h - 1 / 3)].map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join(''); };
 const PC = { paper: '#fbf8f2', ink: '#1d1a17', gold: '#b08a45', gold2: '#d8bd84', mute: '#7a7065', rule: '#d9cdb8', copper: '#a8683e', night: '#16171b' };
 const TAG = { vegetarian: 'V', vegan: 'VG', 'gluten-free': 'GF', 'dairy-free': 'DF', 'nut-free': 'NF', halal: 'H', slimming: 'SL' };
 const THEMES = { classic: { ...PC, desc: '#5b5249', intro: '#4a4239', head: 'serifB', title: 'serifI', body: 'serifI' },
@@ -456,6 +457,12 @@ function kitchenPack(doc, menu, recipes, { W, H, linkFor, pages }) {
     const facts = [`Yield: serves ${r.servings || r.baseServings || 4}`, r.prepMinutes != null && `Prep ${r.prepMinutes} min`, r.cookMinutes != null && `Cook ${r.cookMinutes} min`, `Total ${r.totalMinutes || '?'} min`, r.difficulty && `Difficulty: ${r.difficulty}`].filter(Boolean).join('   ·   ');
     pg.text(facts, M, y, { font: 'sansB', size: 8, color: K.ink, maxW: CW }); y += 14;
     const al = (r.allergens || []); pg.text(`Allergens (UK 14): ${al.length ? al.join(', ') : 'none declared — check every label'}`, M, y, { font: 'sans', size: 8, color: al.length ? '#9b2c2c' : K.mute, maxW: CW }); y += 12;
+    { const N = require('./nutrition'); N.attach(r); const n = r.nutrition, L = n.lights, ps = n.perServing, f = x => (Math.round(x * 10) / 10).toFixed(1);
+      y += 4; pg.text(`GUIDE NUTRITION (ESTIMATED) — serves ${n.servings}, ~${n.portionG} g per serving, dish ~${n.totalWeightG} g`, M, y, { font: 'sansB', size: 7, spacing: 1, color: K.accent, maxW: CW }); y += 11;
+      const cells = [['Energy', `${f(ps.energyKcal)} kcal`, L.energy], ['Fat', f(ps.fatG) + ' g', L.fatG], ['Saturates', f(ps.saturatesG) + ' g', L.saturatesG], ['Carbs', f(ps.carbohydrateG) + ' g', null], ['Sugars', f(ps.sugarsG) + ' g', L.sugarsG], ['Salt', f(ps.saltG) + ' g', L.saltG], ['Fibre', f(ps.fibreG) + ' g', L.fibreG], ['Protein', f(ps.proteinG) + ' g', L.proteinG]];
+      const cw = CW / 8; cells.forEach(([k, v, l], i) => { const x = M + i * cw; const col = l && !l.neutral ? hslHex(l.colour) : '#efe7da'; pg.rect(x + 1, y, cw - 2, 34, col); const tc = l && !l.neutral ? '#ffffff' : K.ink;
+        pg.text(k.toUpperCase(), x + cw / 2, y + 9, { font: 'sansB', size: 6, color: tc, align: 'center' }); pg.text(v, x + cw / 2, y + 20, { font: 'sansB', size: 7.5, color: tc, align: 'center', maxW: cw - 4 }); pg.text(i ? (l ? (l.label === 'MEDIUM' ? 'MED' : l.label) : '') : `${f(ps.energyKj)} kJ · ${l.label}`, x + cw / 2, y + 30, { font: 'sans', size: 6, color: tc, align: 'center' }); });
+      y += 44; y = pg.para(`Per 100 g: ${f(n.per100g.energyKcal)} kcal · fat ${f(n.per100g.fatG)} g · saturates ${f(n.per100g.saturatesG)} g · sugars ${f(n.per100g.sugarsG)} g · salt ${f(n.per100g.saltG)} g · whole dish ${f(n.total.energyKj)} kJ / ${f(n.total.energyKcal)} kcal. Colours: FSA/DHSC 2016 front-of-pack; %RI EU 1169/2011.`, M, y, CW, { font: 'sans', size: 6.8, color: K.mute }) ; y += 6; }
     if (r.approximate) { pg.text('Malcolm was busy — this is the closest library recipe; regenerate it from the Menu Builder.', M, y, { font: 'sans', size: 7.5, color: '#9b2c2c', maxW: CW }); y += 12; }
     y += 8; pg.text('INGREDIENTS', M, y, { font: 'sansB', size: 7.5, spacing: 1.6, color: K.accent }); y += 14;
     const ings = (r.ingredients || []).map(i => i.display || [i.qty, i.unit && i.unit !== 'x' ? i.unit : '', i.name].filter(Boolean).join(' ')); const half = Math.ceil(ings.length / 2); const colW = CW / 2 - 10;

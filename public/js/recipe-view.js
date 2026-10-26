@@ -3,6 +3,19 @@
 (function(){
   const {esc}=window.LP;
   const ALN={'cereals containing gluten':'gluten'};
+  
+  // Guide nutrition panel: complete dish, per serving, per 100 g + FSA-style traffic lights (text labels, not colour only).
+  const NROWS=[['energy','Energy'],['fatG','Fat'],['saturatesG','Saturates'],['carbohydrateG','Carbohydrate'],['sugarsG','Sugars'],['saltG','Salt'],['fibreG','Fibre'],['proteinG','Protein']];
+  const f1=x=>(Math.round((+x||0)*10)/10).toFixed(1);
+  function NP(r){const N=window.Nutrition;if(N&&(!r.nutrition||!r.nutrition.lights))N.attach(r);const n=r.nutrition;if(!n)return'';const L=n.lights||{};
+    const val=(o,k)=>k==='energy'?`${f1(o.energyKj)} kJ<br>${f1(o.energyKcal)} kcal`:`${f1(o[k])} g`;
+    const chip=k=>{const l=L[k];if(!l)return'';const txt=l.label==='MEDIUM'?'MED':l.label;return `<span class="tl${l.positive?' pos':''}${l.neutral?' neu':''}" style="--tl:${l.colour}" title="${esc(k==='energy'?'Energy per serving as % of the 2000 kcal Reference Intake':l.positive?(k==='fibreG'?'Fibre: HIGH ≥6 g/100 g, SOURCE ≥3 g/100 g':'Protein: HIGH ≥20% of energy, SOURCE ≥12%'):'FSA front-of-pack: per 100 g (and per portion when over 100 g)')}">${esc(txt)}</span>`};
+    return `<h4>Nutrition <small class="muted">(guide values, estimated)</small> <button type="button" class="info-tip" aria-label="About these values" title="${esc(N?N.SOURCES:'')}" onclick="this.nextElementSibling.hidden=!this.nextElementSibling.hidden">ⓘ</button><span class="tl-src" hidden>${esc(N?N.SOURCES:'')}</span></h4>
+    <p class="muted" style="font-size:.8rem;margin:.2em 0">Whole dish serves ${esc(n.servings)} · estimated total weight ${esc(n.totalWeightG)} g (≈${esc(n.portionG)} g per serving)${n.method==='estimated'?' · partly Malcolm’s estimate':''}</p>
+    <div class="nutri-wrap"><table class="nutri-t"><thead><tr><th scope="col">Nutrient</th><th scope="col">Per serving</th><th scope="col">Rating</th><th scope="col">Per 100 g</th><th scope="col">Whole dish</th></tr></thead><tbody>
+    ${NROWS.map(([k,lab])=>`<tr><th scope="row">${lab}</th><td>${val(n.perServing,k)}</td><td>${chip(k)}</td><td>${val(n.per100g,k)}</td><td>${val(n.total,k)}</td></tr>`).join('')}</tbody></table></div>
+    <div class="tl-bar" aria-hidden="true"><span>LOW</span><i></i><span>HIGH</span></div>`}
+
   function card(r,{actions=true,premium=false,shareId=null}={}){
     const img=r.image||{src:'/img/ingredients-sm.webp',alt:r.title};
     const el=document.createElement('article');el.className='card recipe';el.dataset.id=r.id;
@@ -16,7 +29,7 @@
     ${r.matchScore!=null?`<div class="score" style="--s:${+r.matchScore}" aria-label="Match score ${+r.matchScore} percent"><b>${+r.matchScore}%</b></div>`:''}</div>
     <div class="cols" style="margin-top:12px"><div><h4>Ingredients</h4><ul class="ing" style="padding-left:18px">${r.ingredients.map(i=>`<li>${esc(i.display||i.name)}</li>`).join('')}</ul>
     ${(r.shoppingList||[]).length?`<h4>🛒 Shopping list</h4><ul style="padding-left:18px" class="muted">${r.shoppingList.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`:''}
-    <h4>Nutrition per serving <small class="muted">(estimate)</small></h4><div class="nutri"><div><b>${esc(r.nutritionPerServing.kcal)}</b>kcal</div><div><b>${esc(r.nutritionPerServing.proteinG)}g</b>protein</div>${r.nutritionPartial?'':`<div><b>${esc(r.nutritionPerServing.carbsG)}g</b>carbs</div><div><b>${esc(r.nutritionPerServing.fatG)}g</b>fat</div>`}</div></div>
+    ${NP(r)}</div></div>
     <div><h4>Method</h4><ol class="steps">${r.steps.map(s=>`<li>${esc(s.text)}${s.timerMinutes?` <button type="button" class="btn ghost sm timer" data-min="${+s.timerMinutes}" aria-label="Start ${+s.timerMinutes} minute timer">⏲ ${+s.timerMinutes} min</button>`:''}</li>`).join('')}</ol>
     ${(r.substitutions||[]).length?`<h4>Swaps &amp; substitutions</h4><ul style="padding-left:18px">${r.substitutions.map(s=>`<li><strong>${esc(s.ingredient)}</strong> → ${esc(s.swap)}</li>`).join('')}</ul>`:''}
     ${r.chefSecret?`<div class="note chef-secret"><strong>🤫 Chef’s secret</strong><p style="margin:.3em 0 0">${esc(r.chefSecret)}</p></div>`:''}
@@ -73,7 +86,7 @@
     if(r.chefSecret){line('Chef’s secret',13,'bold',2);line(r.chefSecret);y+=3}if(r.pairing){line('Pairing: '+r.pairing,10,'normal',3)}
     if((r.substitutions||[]).length){line('Substitutions',13,'bold',2);r.substitutions.forEach(s=>line(`•  ${s.ingredient} → ${s.swap}`))}
     if((r.safetyNotes||[]).length){y+=3;line('Food safety',13,'bold',2);r.safetyNotes.forEach(s=>line('•  '+s,9))}
-    const n=r.nutritionPerServing;y+=3;line(`Nutrition per serving (estimate): ${n.kcal} kcal · ${n.proteinG}g protein${r.nutritionPartial?'':` · ${n.carbsG}g carbs · ${n.fatG}g fat`}`,9,'italic');
+    if(window.Nutrition&&(!r.nutrition||!r.nutrition.lights))window.Nutrition.attach(r);{const n=r.nutrition,ps=n.perServing,L=n.lights;y+=3;line(`Nutrition per serving (guide values, estimated; serves ${n.servings}, ~${n.portionG} g each, dish ~${n.totalWeightG} g): Energy ${f1(ps.energyKj)} kJ / ${f1(ps.energyKcal)} kcal (${L.energy.label}) · Fat ${f1(ps.fatG)} g ${L.fatG.label} · Saturates ${f1(ps.saturatesG)} g ${L.saturatesG.label} · Carbohydrate ${f1(ps.carbohydrateG)} g · Sugars ${f1(ps.sugarsG)} g ${L.sugarsG.label} · Salt ${f1(ps.saltG)} g ${L.saltG.label} · Fibre ${f1(ps.fibreG)} g · Protein ${f1(ps.proteinG)} g. Per 100 g: ${f1(n.per100g.energyKcal)} kcal, fat ${f1(n.per100g.fatG)} g, sat ${f1(n.per100g.saturatesG)} g, sugars ${f1(n.per100g.sugarsG)} g, salt ${f1(n.per100g.saltG)} g. Whole dish: ${f1(n.total.energyKcal)} kcal. FSA front-of-pack criteria.`,9,'italic');}
     y+=4;line('AIchef.food · Ask Malcolm, your AI chef · Always check allergen labels.',8,'italic');
     d.save(`${fname(r)}.pdf`);
   }

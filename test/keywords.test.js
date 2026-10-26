@@ -11,7 +11,7 @@ test('keyword boost moves matching recipes up', () => {
 });
 test('slimming is a hard diet filter on kcal/protein', () => {
   const out = rank({ ...base, diets: ['slimming'], limit: 10 }); assert.ok(out.length);
-  for (const r of out) assert.ok(r.nutritionPerServing.kcal <= 550 && r.nutritionPerServing.proteinG >= 15, r.title);
+  for (const r of out) { const n = require('../src/nutrition').compute(r).perServing; assert.ok(n.energyKcal <= 550 && n.proteinG >= 15, r.title); }
   assert.match(K.SLIMMING_NOTE, /not medical/i); assert.match(K.SLIMMING_NOTE, /pregnan/i);
 });
 test('style cuisines exist with rules', () => {

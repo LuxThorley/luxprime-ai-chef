@@ -79,7 +79,8 @@ function expand(r) {
     source: 'AIchef.food curated library'
   };
 }
-const RECIPES = RAW.map(expand);
+// Slimming uses the deterministic guide nutrition (per serving ≤ 550 kcal, ≥ 15 g protein, saturates not HIGH per portion).
+const RECIPES = RAW.map(expand).map(r => { const n = require('./nutrition').compute(r); r.diet.slimming = n.perServing.energyKcal <= 550 && n.perServing.proteinG >= 15 && n.perServing.saturatesG <= 8; return r; });
 const { curatedImage } = require('./images');
 RECIPES.forEach(r => { r.image = curatedImage(r); });
 

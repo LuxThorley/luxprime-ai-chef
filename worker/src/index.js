@@ -26,6 +26,7 @@ import restaurant from '../../src/restaurant.js';
 import kwMod from '../../src/keywords.js';
 import giftMod from '../../src/gift.js';
 import weekly from '../../src/weekly.js';
+import nutritionMod from '../../src/nutrition.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal','slimming'];
@@ -124,6 +125,9 @@ app.post('/api/billing/webhook', async c => {
   return c.json({ received: true });
 });
 
+// Guide nutrition + traffic lights on every recipe in every JSON response (backfills saved/history/library recipes on view).
+app.use('/api/*', async (c, next) => { await next(); const ct = c.res.headers.get('content-type') || ''; if (!ct.includes('application/json') || c.req.path.startsWith('/api/billing/webhook')) return;
+  try { const txt = await c.res.clone().text(); if (!txt.includes('"ingredients"')) return; const j = nutritionMod.attachAll(JSON.parse(txt)); const h = new Headers(c.res.headers); h.delete('content-length'); c.res = new Response(JSON.stringify(j), { status: c.res.status, headers: h }); } catch (e) { console.error('nutrition', String(e.message || e).slice(0, 120)); } });
 // CSRF double-submit + session lookup for /api/*
 app.use('/api/*', rl('api', 120, 60));
 app.use('/api/*', async (c, next) => {
@@ -210,6 +214,7 @@ async function doSearch(c, u, data) {
   let references = []; try { references = await ((q.inspirationMode === 'malcolm' || q.inspirationMode === 'dioscorides') && !q.escoffier ? [] : escoffier.references(d1all(c), q, { pinned: q.escoffier, ...(q.inspirationMode === 'escoffier' ? { top: 5 } : {}) })); } catch (e) { console.error('escoffier', e && e.message); }
   const [out, answer] = await Promise.all([ai.generate(q, { fetchImpl, retries: +(c.env.AI_RETRIES ?? 1), references }), chat.answerBrief(q.brief, q, { llm: chat.malcolmLlm(c.env, fetchImpl) }).catch(() => null)]);
   let recipes = out.recipes.map(r => ({ ...r, image: imagesMod.curatedImage(r), safetyNotes: safetyNotes(r, q) }));
+  if (q.diets.includes('slimming')) { const ok = recipes.filter(r => { const n = nutritionMod.compute(r).perServing; return n.energyKcal <= 600 && n.proteinG >= 12; }); if (ok.length) recipes = ok; }
   // AI dishes get an AI photo, generated lazily by GET /api/dish-image/:key (never blocks the recipe text).
   if (out.source !== 'offline' && c.env.IMAGES && c.env.AI) {
     try {
