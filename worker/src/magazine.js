@@ -91,6 +91,8 @@ export async function tick(env, { fetchImpl, base, batch = 1 }) {
   if (+lp.day === 1 && +lp.hour >= 8) {
     const { results } = await env.DB.prepare("SELECT u.* FROM users u JOIN magazine_subs m ON m.user_id=u.id WHERE m.opt_in=1 AND u.email_verified=1").all();
     for (const u0 of results) { const u = await effectiveUser(env.DB, u0, env.IMAGES); const row = await magRow(env, u.id); if (u._trial || !entitled(u, row)) continue;
+      // Restauranteur members on the weekly briefing don't also get the monthly issue (their 'monthly' preference restores it).
+      if (plansMod.isRestaurateur(u) && !isTester(u) && !isAdmin(u) && ((await env.IMAGES.get(`weekly/pref/${u.id}`)) || 'weekly') !== 'monthly') continue;
       const r = await env.DB.prepare("INSERT OR IGNORE INTO magazine_issues(user_id,month,kind,status) VALUES(?,?,'monthly','pending')").bind(u.id, month).run(); log.enqueued += r.meta.changes || 0; }
   }
   await env.DB.prepare("UPDATE magazine_issues SET status='retry' WHERE status='working' AND kind IN ('monthly','sample') AND started_at < datetime('now','-30 minutes')").run();

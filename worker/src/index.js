@@ -24,6 +24,7 @@ import mailer from '../../src/mailer.js';
 import restaurant from '../../src/restaurant.js';
 import kwMod from '../../src/keywords.js';
 import giftMod from '../../src/gift.js';
+import weekly from '../../src/weekly.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal','slimming'];
@@ -633,6 +634,44 @@ app.post('/api/billing/checkout', needAuth, async c => {
     allow_promotion_codes: 'true', success_url: `${base}/${plan.id === 'restaurant' ? 'menu-builder.html' : 'account.html'}?checkout=success`, cancel_url: `${base}/pricing.html?checkout=cancelled` });
   return c.json({ url: s.url });
 });
+// ---- Restauranteur Weekly (Restauranteur members only; everyone else stays monthly) ----
+const WK = { pref: id => `weekly/pref/${id}`, sent: (id, w) => `weekly/sent/${id}/${w}`, issue: t => `weekly/issue/${t}`, utok: id => `weekly/utok/${id}`, unsub: t => `weekly/unsub/${t}` };
+async function weeklyToken(E, uid) { let t = await E.IMAGES.get(WK.utok(uid)); if (!t) { t = randomId(18, 'base64url'); await E.IMAGES.put(WK.utok(uid), t); await E.IMAGES.put(WK.unsub(t), String(uid)); } return t; }
+async function weeklyIssue(E, u, { useAi = true } = {}) {
+  const J = async k => { const v = await E.IMAGES.get(k); try { return v ? JSON.parse(v) : null; } catch { return null; } };
+  const profile = (await J(`rest/${u.id}/profile`)) || {}; if (!Array.isArray(profile.sources)) profile.sources = restaurant.sourcesOf(profile);
+  const menus = (await J(`rest/${u.id}/menus`)) || []; const last = menus[0] ? await J(`rest/menu/${menus[0].id}`) : null;
+  const keywords = kwMod.parseKeywords((last && last.spec && last.spec.refine && last.spec.refine.keywords) || '');
+  let issue = weekly.buildIssue({ profile, menus, keywords, user: u });
+  if (useAi) { try { await syncEnv(E); const out = await chat.malcolmLlm(E, malcolmFetch(E))(weekly.aiMessages({ profile, menus, keywords }, issue), { maxTokens: 600 }); const j = JSON.parse(String(out).replace(/^[^{]*/, '').replace(/[^}]*$/, '')); issue = weekly.buildIssue({ profile, menus, keywords, user: u }, new Date(), j); } catch {} }
+  return issue;
+}
+async function weeklyRender(E, u, issue, base) { const t = await weeklyToken(E, u.id); const tok = randomId(18, 'base64url'); await E.IMAGES.put(WK.issue(tok), JSON.stringify(issue), { expirationTtl: 120 * 86400 });
+  const links = { webUrl: `${base}/m/weekly/${tok}`, unsubUrl: `${base}/m/weekly/unsub/${t}`, prefsUrl: `${base}/menu-builder.html#weekly` }; return { html: weekly.renderHtml(issue, links), text: weekly.renderText(issue, links), links }; }
+app.get('/api/restaurant/weekly', needAuth, needResto, async c => c.json({ pref: (await c.env.IMAGES.get(WK.pref(c.get('user').id))) || 'weekly', sendDay: 'Monday from 08:00 UK time', week: weekly.isoWeek() }));
+app.put('/api/restaurant/weekly', needAuth, needResto, async c => { const b = (await body(c)) || {}; if (!['weekly', 'monthly', 'off'].includes(b.pref)) return c.json({ error: 'Choose weekly, monthly or off' }, 400); await c.env.IMAGES.put(WK.pref(c.get('user').id), b.pref); return c.json({ pref: b.pref }); });
+// Render-only preview (never emails a real member). Optional test send only to an @example.com address.
+app.get('/api/restaurant/weekly/preview', rl('wk-prev', 10, 600), needAuth, needResto, async c => { const u = c.get('user'); const issue = await weeklyIssue(c.env, u, { useAi: c.req.query('ai') !== '0' }); const r = await weeklyRender(c.env, u, issue, appUrl(c)); return c.html(r.html); });
+app.post('/api/restaurant/weekly/test', rl('wk-test', 3, 600), needAuth, needResto, async c => { const b = (await body(c)) || {}; const to = String(b.to || '').trim().toLowerCase();
+  if (!/^[a-z0-9._%+-]+@example\.com$/.test(to)) return c.json({ error: 'Test sends go to @example.com addresses only' }, 400);
+  const u = c.get('user'); const issue = await weeklyIssue(c.env, u, { useAi: false }); const r = await weeklyRender(c.env, u, issue, appUrl(c));
+  const res = await mailer.send(c.env, { to, subject: `[Preview] ${issue.title}`, text: r.text, html: r.html }).catch(e => ({ sent: false, reason: 'error' })); return c.json({ ...res, webUrl: r.links.webUrl }); });
+app.get('/m/weekly/unsub/:t', async c => { const uid = await c.env.IMAGES.get(WK.unsub(c.req.param('t'))); if (uid) await c.env.IMAGES.put(WK.pref(uid), 'off');
+  return c.html(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Unsubscribed</title><body style="font-family:Georgia,serif;max-width:560px;margin:60px auto;padding:0 20px"><h1>${uid ? 'You’re unsubscribed' : 'Link not recognised'}</h1><p>${uid ? 'You won’t receive Restauranteur Weekly any more. You can switch it back on, or choose the monthly magazine instead, in the <a href="/menu-builder.html#weekly">Menu Builder</a>.' : 'This unsubscribe link is invalid.'}</p></body>`); });
+app.post('/m/weekly/unsub/:t', async c => { const uid = await c.env.IMAGES.get(WK.unsub(c.req.param('t'))); if (uid) await c.env.IMAGES.put(WK.pref(uid), 'off'); return c.text('ok'); });
+app.get('/m/weekly/:t', async c => { const v = await c.env.IMAGES.get(WK.issue(c.req.param('t'))); if (!v) return c.text('This issue has expired', 404); return c.html(weekly.renderHtml(JSON.parse(v))); });
+async function weeklyTick(E) {
+  if (E.WEEKLY_SEND === 'off' || !weekly.sendWindow()) return { skipped: true }; const week = weekly.isoWeek(); const base = appUrlEnv(E); const sent = [];
+  if (week < (E.WEEKLY_START || '2026-W45')) return { skipped: 'before first issue week' }; // first real issue Mon 2 Nov 2026 (no sends during build/testing)
+  const { results } = await E.DB.prepare("SELECT * FROM users WHERE plan='restaurant' AND sub_status IN ('active','trialing') AND email_verified=1 LIMIT 500").all();
+  for (const u of results) { if (sent.length >= 3) break; // a few per 20-minute tick keeps CPU/AI inside limits
+    if (!plansMod.isRestaurateur(u) || await E.IMAGES.get(WK.sent(u.id, week))) continue; if (((await E.IMAGES.get(WK.pref(u.id))) || 'weekly') !== 'weekly') continue;
+    await E.IMAGES.put(WK.sent(u.id, week), 'working', { expirationTtl: 14 * 86400 });
+    try { const issue = await weeklyIssue(E, u); const r = await weeklyRender(E, u, issue, base);
+      const res = await mailer.send(E, { to: u.email, subject: issue.title, text: r.text, html: r.html, headers: { 'List-Unsubscribe': `<${r.links.unsubUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } });
+      await E.IMAGES.put(WK.sent(u.id, week), res.sent ? 'sent' : 'skipped', { expirationTtl: 14 * 86400 }); sent.push(u.id); } catch (e) { await E.IMAGES.delete(WK.sent(u.id, week)); console.error('weekly', String(e.message || e).slice(0, 200)); } }
+  return { week, sent: sent.length };
+}
 // ---- Smart Gift memberships ----
 const syncEnv = async E => { globalThis.process = globalThis.process || { env: {} }; process.env = process.env || {}; for (const [k, v] of Object.entries(E)) if (typeof v === 'string') process.env[k] = v; };
 const appUrlEnv = E => (E.APP_URL || 'https://aichef.food').replace(/\/$/, '');
@@ -702,6 +741,7 @@ export default {
     if (e.cron === '17 3 * * *') { await env.DB.batch([env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(Date.now()), env.DB.prepare('DELETE FROM rate_limits WHERE reset_at<?').bind(Math.floor(Date.now() / 1000))]); return; }
     // Magazine: every 20 min — enqueue on the 1st from 08:00 UK, then one issue per tick (keeps each run inside Workers/AI limits).
     globalThis.process = globalThis.process || { env: {} }; process.env = process.env || {}; for (const [k, v] of Object.entries(env)) if (typeof v === 'string') process.env[k] = v;
+    try { const wl = await weeklyTick(env); if (wl.sent) console.log('weekly', JSON.stringify(wl)); } catch (e) { console.error('weekly tick', String(e.message || e).slice(0, 200)); }
     // Scheduled gift emails (sent from the chosen date, 08:00 UK-ish, by this 20-minute cron).
     try { for (const d of await giftMod.dueScheduled(env.IMAGES)) { const o = JSON.parse((await env.IMAGES.get(`giftorder/${d.orderId}`)) || 'null'); await env.IMAGES.delete(d.key); if (o && o.status === 'paid' && o.emailStatus === 'scheduled') { o.emailStatus = 'due'; await giftDeliver(env, o, appUrlEnv(env)); } } } catch (e) { console.error('gift cron', String(e.message || e).slice(0, 200)); }
     const log = await magW.tick(env, { fetchImpl: malcolmFetch(env), base: (env.APP_URL || 'https://luxprime-ai-chef.oliverluxthorley.workers.dev').replace(/\/$/, ''), batch: +env.MAGAZINE_BATCH || 1 });
