@@ -1,11 +1,13 @@
 // Gastronomique household seats. An associate's effective plan is derived at request time from the owner's live subscription.
 import plansMod from '../../src/plans.js';
+import giftMod from '../../src/gift.js';
 import { randomId } from './crypto.js';
 const { canOwnSeats, isPremium, seatCap } = plansMod;
 
 // Returns the user with an in-memory Gastronomique plan if they are an active associate of an entitled owner (never written to D1).
-export async function effectiveUser(DB, u0) {
-  if (!u0) return u0; const u = plansMod.withTrial(u0);
+export async function effectiveUser(DB, u0, KV) {
+  // Prepaid gift grants (KV) apply first, then the site trial, then household seats.
+  if (!u0) return u0; const u = plansMod.withTrial(KV ? await giftMod.grantFor(KV, u0).catch(() => u0) : u0);
   const m = await DB.prepare("SELECT o.* , m.id AS member_id FROM plan_members m JOIN users o ON o.id=m.owner_id WHERE m.user_id=? AND m.status='active'").bind(u.id).first();
   if (!m || !canOwnSeats(m)) return u;
   const own = isPremium(u) && !u._trial && ['gastronomique', 'family', 'head', 'restaurant'].includes(u.plan);

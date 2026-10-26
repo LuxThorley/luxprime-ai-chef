@@ -23,6 +23,7 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "jspdf": "^2.5.2",
+    "qrcode-generator": "^1.5.2",
     "stripe": "^16.12.0",
     "zod": "^3.23.8"
   },

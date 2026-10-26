@@ -23,6 +23,7 @@ import verifyMod from '../../src/verify.js';
 import mailer from '../../src/mailer.js';
 import restaurant from '../../src/restaurant.js';
 import kwMod from '../../src/keywords.js';
+import giftMod from '../../src/gift.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal','slimming'];
@@ -43,7 +44,7 @@ const SESSION_DAYS = 30;
 const app = new Hono();
 const appUrl = c => (c.env.APP_URL || new URL(c.req.url).origin).replace(/\/$/, '');
 const db = c => c.env.DB;
-const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, emailVerified: verifyMod.isVerified(u), plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), restaurateur: plansMod.isRestaurateur(u), trial: u._trial ? { endsAt: new Date(+u.trial_ends_at).toISOString(), daysLeft: Math.max(1, Math.ceil((+u.trial_ends_at - Date.now()) / 864e5)) } : null, household: u._associateOf ? { role: 'member', owner: u._ownerName } : plansMod.canOwnSeats(u) ? { role: 'owner', seats: plansMod.seatCap() } : null, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
+const publicUser = u => u && ({ id: u.id, email: u.email, name: u.name, emailVerified: verifyMod.isVerified(u), plan: isAdmin(u) ? 'admin' : isTester(u) ? 'tester' : u.plan, planName: plansMod.planName(u), magazineIncluded: plansMod.magazineIncluded(u), restaurateur: plansMod.isRestaurateur(u), gift: u._gift ? { plan: u._gift.plan, until: new Date(u._gift.until).toISOString() } : null, magazineGiftUntil: u._magGift ? new Date(u._magGift.until).toISOString() : null, trial: u._trial ? { endsAt: new Date(+u.trial_ends_at).toISOString(), daysLeft: Math.max(1, Math.ceil((+u.trial_ends_at - Date.now()) / 864e5)) } : null, household: u._associateOf ? { role: 'member', owner: u._ownerName } : plansMod.canOwnSeats(u) ? { role: 'owner', seats: plansMod.seatCap() } : null, admin: isAdmin(u), tester: isTester(u), subStatus: u.sub_status, premium: isPremium(u), searchesUsed: u.searches_used, searchesLeft: isPremium(u) ? null : Math.max(0, plans().free.searches - u.searches_used) });
 const bad = (c, e) => c.json({ error: (e.issues && e.issues[0] && e.issues[0].message) || 'Invalid input' }, 400);
 
 // Expose string bindings to the shared Node modules (ai.js / plans.js read process.env).
@@ -77,6 +78,13 @@ app.post('/api/billing/webhook', async c => {
   if (await db(c).prepare('SELECT 1 FROM stripe_events WHERE id=?').bind(event.id).first()) return c.json({ received: true, duplicate: true });
   await db(c).prepare('INSERT INTO stripe_events(id) VALUES(?)').bind(event.id).run();
   const o = event.data.object; const E = c.env;
+  // Smart Gift: one-off payment → fulfil only once Stripe reports it paid (async methods arrive via async_payment_succeeded).
+  if (['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(event.type) && o.mode === 'payment' && o.metadata && o.metadata.kind === 'gift') {
+    if (o.payment_status !== 'paid') return c.json({ received: true, pending: true });
+    await syncEnv(E); const r = await giftMod.fulfil(E.IMAGES, o.metadata.order, o);
+    if (r.order && !r.already) await giftDeliver(E, r.order, appUrlEnv(E), { receipt: true });
+    return c.json({ received: true, gift: r.error || r.order.status });
+  }
   const priceToPlan = plansMod.planFromPrice;
   const isMag = plansMod.isMagazinePrice;
   const magUpsert = (uidSql, uidVal, status, subId, itemId) => db(c).prepare(`INSERT INTO magazine_subs(user_id,status,stripe_subscription_id,stripe_item_id,unsub_token,updated_at) SELECT u.id,?,?,?,?,CURRENT_TIMESTAMP FROM users u WHERE u.id=(${uidSql}) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status, stripe_subscription_id=excluded.stripe_subscription_id, stripe_item_id=COALESCE(excluded.stripe_item_id, stripe_item_id), updated_at=CURRENT_TIMESTAMP`).bind(status, subId, itemId || null, magW.newUnsubToken(), uidVal);
@@ -124,7 +132,7 @@ app.use('/api/*', async (c, next) => {
   const sid = getCookie(c, 'lp_session');
   if (sid) {
     const u = await db(c).prepare('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?').bind(sid, Date.now()).first();
-    if (u) c.set('user', await members.effectiveUser(db(c), u));
+    if (u) c.set('user', await members.effectiveUser(db(c), u, c.env.IMAGES));
   }
   await next();
 });
@@ -144,7 +152,7 @@ app.post('/api/auth/register', rl('auth', 20, 900), async c => {
   const u = await db(c).prepare('INSERT INTO users(email,password_hash,name,trial_ends_at) VALUES(?,?,?,?) RETURNING *').bind(p.data.email, hash, p.data.name || null, Date.now() + plansMod.TRIAL_DAYS * 864e5).first();
   await startSession(c, u); let verification = 'pending';
   try { const r = await verifyMod.sendVerification(cq(c), c.env, u, appUrl(c)); if (r.sent) verification = 'sent'; } catch (e) { console.error('verify email', e && e.message); }
-  return c.json({ user: publicUser(await members.effectiveUser(db(c), u)), verification }, 201);
+  return c.json({ user: publicUser(await members.effectiveUser(db(c), u, c.env.IMAGES)), verification }, 201);
 });
 app.post('/api/auth/verify', rl('verify', 30, 3600), async c => {
   const r = await verifyMod.consume(cq(c), String((await body(c)).token || '')); if (!r.ok) return c.json({ error: r.error, expired: !!r.expired }, 400);
@@ -209,7 +217,7 @@ async function doSearch(c, u, data) {
   await db(c).batch([
     db(c).prepare('UPDATE users SET searches_used = searches_used + ? WHERE id=?').bind(prem ? 0 : 1, u.id), // Commis Chef allowance only counts non-paid, non-trial searches
     db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify(data), recipes.map(r => r.title).join(' · '))]);
-  const fresh = await members.effectiveUser(db(c), await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first());
+  const fresh = await members.effectiveUser(db(c), await db(c).prepare('SELECT * FROM users WHERE id=?').bind(u.id).first(), c.env.IMAGES);
   return [200, { source: out.source, answer: answer || out.answer || null, aiBusy: !!out.fallbackReason, ...(out.fallbackReason && isAdmin(u) ? { fallbackReason: out.fallbackReason } : {}), disclaimer: DISCLAIMER, inspirationMode: q.inspirationMode, restaurantContext: restoUsed, keywords: q.keywords, ...(q.diets.includes('slimming') ? { slimmingNote: kwMod.SLIMMING_NOTE } : {}), understood: briefMod.summary(brief), question: brief.question, recipes, blessing: out.blessing || null, closing: out.closing || null, ...(isAdmin(u) && out.meta ? { meta: out.meta } : {}), user: publicUser(fresh) }];
 }
 app.post('/api/chat', rl('chat-ip', 30, 300), needAuth, async c => {
@@ -357,7 +365,7 @@ app.post('/api/members/accept', rl('accept', 20, 3600), needAuth, async c => {
   if (!verifyMod.isVerified(c.get('user'))) return c.json({ error: 'Please confirm your email address first, then accept the invite', verify: true }, 403);
   const raw = await db(c).prepare('SELECT * FROM users WHERE id=?').bind(c.get('user').id).first();
   const r = await members.accept(db(c), raw, t); if (r.error) return c.json({ error: r.error }, r.status);
-  return c.json({ ok: true, user: publicUser(await members.effectiveUser(db(c), raw)) });
+  return c.json({ ok: true, user: publicUser(await members.effectiveUser(db(c), raw, c.env.IMAGES)) });
 });
 
 // ---- AIchef.food Magazine ----
@@ -625,6 +633,54 @@ app.post('/api/billing/checkout', needAuth, async c => {
     allow_promotion_codes: 'true', success_url: `${base}/${plan.id === 'restaurant' ? 'menu-builder.html' : 'account.html'}?checkout=success`, cancel_url: `${base}/pricing.html?checkout=cancelled` });
   return c.json({ url: s.url });
 });
+// ---- Smart Gift memberships ----
+const syncEnv = async E => { globalThis.process = globalThis.process || { env: {} }; process.env = process.env || {}; for (const [k, v] of Object.entries(E)) if (typeof v === 'string') process.env[k] = v; };
+const appUrlEnv = E => (E.APP_URL || 'https://aichef.food').replace(/\/$/, '');
+// Recipient email (now) and buyer receipt. Never throws: delivery status is recorded on the order.
+async function giftDeliver(E, order, base, { receipt = false } = {}) {
+  const kv = E.IMAGES;
+  if (order.delivery === 'email' && order.emailStatus === 'due') {
+    try { const r = await mailer.send(E, giftMod.recipientEmail(order, base)); order.emailStatus = r.sent ? 'sent' : 'not-sent:' + r.reason; order.emailedAt = Date.now(); } catch (e) { order.emailStatus = 'failed'; console.error('gift email', String(e.message || e).slice(0, 200)); }
+  }
+  if (receipt && !order.receiptSent) { try { const r = await mailer.send(E, giftMod.receiptEmail(order, base)); order.receiptSent = !!r.sent; } catch (e) { console.error('gift receipt', String(e.message || e).slice(0, 200)); } }
+  await kv.put(`giftorder/${order.id}`, JSON.stringify(order));
+}
+const giftOpts = () => ({ plans: Object.entries(giftMod.GIFT_PLANS).map(([id, p]) => ({ id, ...p, prices: Object.fromEntries(giftMod.TERMS.map(m => [m, giftMod.gbp(giftMod.amountPence(id, m))])) })), terms: giftMod.TERMS.map(m => ({ months: m, label: giftMod.termLabel(m) })), expiryDays: giftMod.EXPIRY_DAYS });
+app.get('/api/gift/options', c => c.json({ ...giftOpts(), onSale: !!c.env.STRIPE_SECRET_KEY }));
+app.post('/api/gift/checkout', needAuth, rl('giftco', 10, 600), async c => {
+  const E = c.env; if (!E.STRIPE_SECRET_KEY) return c.json({ error: 'Payments are not configured yet' }, 503);
+  const u = c.get('user'); const p = giftMod.OrderSchema.safeParse((await body(c)) || {});
+  if (!p.success) return c.json({ error: p.error.issues[0].message, field: p.error.issues[0].path[0] }, 400);
+  const order = await giftMod.createOrder(E.IMAGES, p.data, u); const base = appUrl(c); const gp = giftMod.GIFT_PLANS[order.plan];
+  let gp2 = {}; try { gp2 = JSON.parse(E.STRIPE_GIFT_PRICES || '{}'); } catch {}
+  const giftPrice = gp2[order.plan] && gp2[order.plan][order.months]; const prod = gp2[order.plan] && gp2[order.plan].product;
+  const s = await stripeApi(E.STRIPE_SECRET_KEY, 'checkout/sessions', {
+    mode: 'payment', client_reference_id: String(u.id), ...(u.stripe_customer_id ? { customer: u.stripe_customer_id } : { customer_email: u.email }),
+    'line_items[0][quantity]': 1, ...(giftPrice ? { 'line_items[0][price]': giftPrice } : { 'line_items[0][price_data][currency]': 'gbp', 'line_items[0][price_data][unit_amount]': order.amount }),
+    ...(giftPrice ? {} : prod ? { 'line_items[0][price_data][product]': prod } : { 'line_items[0][price_data][product_data][name]': `Gift: ${gp.name}` }),
+    'payment_intent_data[description]': `AIchef.food gift — ${gp.name}, ${giftMod.termLabel(order.months)} for ${order.recipientName}`.slice(0, 200),
+    'metadata[kind]': 'gift', 'metadata[order]': order.id, 'metadata[plan]': order.plan, 'metadata[months]': String(order.months), 'payment_intent_data[metadata][kind]': 'gift', 'payment_intent_data[metadata][order]': order.id,
+    success_url: `${base}/gift?order=${order.id}&t=${order.buyerToken}&paid=1`, cancel_url: `${base}/gift?checkout=cancelled` });
+  order.sessionId = s.id; await E.IMAGES.put(`giftorder/${order.id}`, JSON.stringify(order));
+  return c.json({ url: s.url, order: order.id });
+});
+const buyerOrder = async c => { const o = JSON.parse((await c.env.IMAGES.get(`giftorder/${c.req.param('id')}`)) || 'null'); return o && timingSafeEqualStr(String(c.req.query('t') || ''), o.buyerToken) ? o : null; };
+app.get('/api/gift/order/:id', rl('giftord', 60, 60), async c => {
+  const o = await buyerOrder(c); if (!o) return c.json({ error: 'Order not found' }, 404); const gp = giftMod.GIFT_PLANS[o.plan];
+  return c.json({ id: o.id, status: o.status, plan: o.plan, planName: gp.name, months: o.months, term: giftMod.termLabel(o.months), amount: giftMod.gbp(o.amount), delivery: o.delivery, recipientName: o.recipientName, recipientEmail: o.recipientEmail, message: o.message, sendAt: o.sendAt || null, emailStatus: o.emailStatus || null,
+    code: o.status === 'paid' ? o.code : null, expiresAt: o.expiresAt || null, redeemed: !!o.redeemedAt });
+});
+app.get('/api/gift/order/:id/certificate', rl('giftpdf', 30, 60), async c => {
+  const o = await buyerOrder(c); if (!o || o.status !== 'paid') return c.json({ error: 'Certificate not available' }, 404);
+  return new Response(giftMod.certificatePdf(o, await loadMenuFonts(c), appUrl(c)), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="AIchef-Gift-Certificate-${o.recipientName.replace(/[^\w]+/g, '-')}.pdf"`, 'Cache-Control': 'private, no-store' } });
+});
+app.get('/api/gift/check', rl('giftchk', 20, 600), async c => c.json(await giftMod.status(c.env.IMAGES, c.req.query('code'))));
+app.post('/api/gift/redeem', needAuth, rl('giftred', 10, 600), async c => {
+  const b = (await body(c)) || {}; const r = await giftMod.redeem(c.env.IMAGES, b.code, c.get('user'));
+  if (r.error) return c.json({ error: r.error }, r.status || 400);
+  const raw = await db(c).prepare('SELECT * FROM users WHERE id=?').bind(c.get('user').id).first();
+  return c.json({ ...r, until: r.until ? new Date(r.until).toISOString() : null, user: publicUser(await members.effectiveUser(db(c), raw, c.env.IMAGES)) });
+});
 app.post('/api/billing/portal', needAuth, async c => {
   if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: 'Payments are not configured yet' }, 503);
   const u = c.get('user'); if (!u.stripe_customer_id) return c.json({ error: 'No subscription yet' }, 400);
@@ -643,6 +699,8 @@ export default {
     if (e.cron === '17 3 * * *') { await env.DB.batch([env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(Date.now()), env.DB.prepare('DELETE FROM rate_limits WHERE reset_at<?').bind(Math.floor(Date.now() / 1000))]); return; }
     // Magazine: every 20 min — enqueue on the 1st from 08:00 UK, then one issue per tick (keeps each run inside Workers/AI limits).
     globalThis.process = globalThis.process || { env: {} }; process.env = process.env || {}; for (const [k, v] of Object.entries(env)) if (typeof v === 'string') process.env[k] = v;
+    // Scheduled gift emails (sent from the chosen date, 08:00 UK-ish, by this 20-minute cron).
+    try { for (const d of await giftMod.dueScheduled(env.IMAGES)) { const o = JSON.parse((await env.IMAGES.get(`giftorder/${d.orderId}`)) || 'null'); await env.IMAGES.delete(d.key); if (o && o.status === 'paid' && o.emailStatus === 'scheduled') { o.emailStatus = 'due'; await giftDeliver(env, o, appUrlEnv(env)); } } } catch (e) { console.error('gift cron', String(e.message || e).slice(0, 200)); }
     const log = await magW.tick(env, { fetchImpl: malcolmFetch(env), base: (env.APP_URL || 'https://luxprime-ai-chef.oliverluxthorley.workers.dev').replace(/\/$/, ''), batch: +env.MAGAZINE_BATCH || 1 });
     if (log.enqueued || log.processed.length) console.log('magazine', JSON.stringify(log));
   }

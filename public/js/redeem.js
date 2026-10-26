@@ -1,0 +1,12 @@
+(()=>{const{api,esc}=window.LP;const $=s=>document.querySelector(s);const q=new URLSearchParams(location.search);
+const fmt=t=>new Date(t).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
+const code=q.get('code')||sessionStorage.getItem('giftCode')||'';$('#rCode').value=code;
+let timer;async function check(){const v=$('#rCode').value.trim();if(v.replace(/[^a-z0-9]/gi,'').length<16){$('#rInfo').textContent='';return}
+  try{const s=await api('/api/gift/check?code='+encodeURIComponent(v));$('#rInfo').innerHTML=s.valid?`<p class="note">🎁 ${esc(s.months===1?'1 month':s.months+' months')} of <b>${esc(s.planName)}</b>${s.recipientName?' for '+esc(s.recipientName):''} · redeem by ${fmt(s.expiresAt)}</p>`:`<p class="note">${s.status==='redeemed'?'This code has already been redeemed.':s.status==='expired'?'This code has expired.':'We couldn’t find that code — check it and try again.'}</p>`}catch(e){$('#rInfo').textContent=e.message}}
+$('#rCode').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(check,350)});if(code)check();
+$('#redeemForm').addEventListener('submit',async e=>{e.preventDefault();const v=$('#rCode').value.trim();const me=await api('/api/me').catch(()=>({}));
+  if(!me.user){sessionStorage.setItem('giftCode',v);$('#rMsg').innerHTML=`<p class="note">Please <a href="/account.html?next=/redeem">sign in or create a free account</a> to redeem — we’ll bring you straight back here with your code.</p>`;return}
+  const btn=$('#rGo');btn.disabled=true;try{const r=await api('/api/gift/redeem',{method:'POST',body:{code:v}});sessionStorage.removeItem('giftCode');
+    const how=r.how==='queued'?`It’s queued and will start automatically when your current paid subscription ends (cancel renewal in your account whenever you like).`:r.how==='extended'?`We’ve added it to your existing gift — now active until ${fmt(r.until)}.`:`It’s active now until ${fmt(r.until)}.`;
+    $('#rMsg').innerHTML=`<div class="card" style="padding:18px;margin-top:12px"><h3 style="margin-top:0">🎉 Enjoy ${esc(r.months===1?'1 month':r.months+' months')} of ${esc(r.planName)}</h3><p>${how}</p><p class="actions"><a class="btn" href="${r.plan==='restaurant'?'/menu-builder.html':'/app.html'}">Start cooking with Malcolm</a> <a class="btn ghost" href="/account.html">My account</a></p></div>`;$('#rInfo').textContent=''}
+  catch(err){$('#rMsg').innerHTML=`<p class="note" role="alert">${esc(err.message)}</p>`;btn.disabled=false}});})();
