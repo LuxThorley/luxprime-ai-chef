@@ -10,7 +10,8 @@ import imagesMod from '../../src/images.js';
 import escoffier from '../../src/escoffier.js';
 import dishimage from '../../src/dishimage.js';
 import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSafeEqualStr } from './crypto.js';
-import { stripeApi } from './stripe.js';
+import { stripeApi , stripeGet } from './stripe.js';
+import stripeCust from '../../src/stripecust.js';
 import * as magW from './magazine.js';
 import * as members from './members.js';
 import community from '../../src/community.js';
@@ -79,6 +80,10 @@ app.post('/api/billing/webhook', async c => {
   if (await db(c).prepare('SELECT 1 FROM stripe_events WHERE id=?').bind(event.id).first()) return c.json({ received: true, duplicate: true });
   await db(c).prepare('INSERT INTO stripe_events(id) VALUES(?)').bind(event.id).run();
   const o = event.data.object; const E = c.env;
+  if (event.type === 'checkout.session.async_payment_failed' && o.metadata && o.metadata.kind === 'gift') {
+    const ord = JSON.parse((await E.IMAGES.get(`giftorder/${o.metadata.order}`)) || 'null'); if (ord && ord.status === 'pending') { ord.status = 'failed'; ord.failedAt = Date.now(); await E.IMAGES.put(`giftorder/${ord.id}`, JSON.stringify(ord)); }
+    return c.json({ received: true, gift: 'failed' });
+  }
   // Smart Gift: one-off payment → fulfil only once Stripe reports it paid (async methods arrive via async_payment_succeeded).
   if (['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(event.type) && o.mode === 'payment' && o.metadata && o.metadata.kind === 'gift') {
     if (o.payment_status !== 'paid') return c.json({ received: true, pending: true });
@@ -621,7 +626,7 @@ app.post('/api/billing/checkout', needAuth, async c => {
     }
     const s = await stripeApi(E.STRIPE_SECRET_KEY, 'checkout/sessions', {
       mode: 'subscription', 'line_items[0][price]': magPrice, 'line_items[0][quantity]': 1, client_reference_id: String(u.id),
-      ...(u.stripe_customer_id ? { customer: u.stripe_customer_id } : { customer_email: u.email }),
+      ...who(await liveCustomer(c, u), u),
       'metadata[plan]': 'magazine', 'subscription_data[metadata][plan]': 'magazine', 'subscription_data[metadata][user_id]': String(u.id),
       allow_promotion_codes: 'true', success_url: `${base}/account.html?checkout=magazine#magazine`, cancel_url: `${base}/pricing.html?checkout=cancelled#magazine` });
     return c.json({ url: s.url });
@@ -629,7 +634,7 @@ app.post('/api/billing/checkout', needAuth, async c => {
   const plan = plans()[b && b.plan]; const priceId = plan && (annual ? plan.annualPriceId : plan.priceId); if (!plan || !priceId) return c.json({ error: plan ? `${annual ? 'Annual' : 'Monthly'} billing for ${plan.name} is not on sale yet` : 'Unknown plan' }, plan ? 503 : 400);
   const s = await stripeApi(E.STRIPE_SECRET_KEY, 'checkout/sessions', {
     mode: 'subscription', 'line_items[0][price]': priceId, 'line_items[0][quantity]': 1, client_reference_id: String(u.id),
-    ...(u.stripe_customer_id ? { customer: u.stripe_customer_id } : { customer_email: u.email }),
+    ...who(await liveCustomer(c, u), u),
     'metadata[plan]': plan.id, 'subscription_data[metadata][plan]': plan.id, 'subscription_data[metadata][user_id]': String(u.id),
     allow_promotion_codes: 'true', success_url: `${base}/${plan.id === 'restaurant' ? 'menu-builder.html' : 'account.html'}?checkout=success`, cancel_url: `${base}/pricing.html?checkout=cancelled` });
   return c.json({ url: s.url });
@@ -664,7 +669,11 @@ async function weeklyTick(E) {
   if (E.WEEKLY_SEND === 'off' || !weekly.sendWindow()) return { skipped: true }; const week = weekly.isoWeek(); const base = appUrlEnv(E); const sent = [];
   if (week < (E.WEEKLY_START || '2026-W45')) return { skipped: 'before first issue week' }; // first real issue Mon 2 Nov 2026 (no sends during build/testing)
   const { results } = await E.DB.prepare("SELECT * FROM users WHERE plan='restaurant' AND sub_status IN ('active','trialing') AND email_verified=1 LIMIT 500").all();
-  for (const u of results) { if (sent.length >= 3) break; // a few per 20-minute tick keeps CPU/AI inside limits
+  // Plus anyone whose Restauranteur access comes from a redeemed gift (KV grants).
+  const ids = new Set(results.map(u => u.id)); let cur; const gifted = [];
+  do { const l = await E.IMAGES.list({ prefix: 'grant/', cursor: cur }); cur = l.list_complete ? null : l.cursor; for (const k of l.keys) { const id = +k.name.slice(6); if (id && !ids.has(id)) gifted.push(id); } } while (cur);
+  for (const id of gifted.slice(0, 500)) { const u = await E.DB.prepare('SELECT * FROM users WHERE id=?').bind(id).first(); if (u) results.push(u); }
+  for (const u0 of results) { const u = await members.effectiveUser(E.DB, u0, E.IMAGES); if (!verifyMod.isVerified(u)) continue; if (sent.length >= 3) break; // a few per 20-minute tick keeps CPU/AI inside limits
     if (!plansMod.isRestaurateur(u) || await E.IMAGES.get(WK.sent(u.id, week))) continue; if (((await E.IMAGES.get(WK.pref(u.id))) || 'weekly') !== 'weekly') continue;
     await E.IMAGES.put(WK.sent(u.id, week), 'working', { expirationTtl: 14 * 86400 });
     try { const issue = await weeklyIssue(E, u); const r = await weeklyRender(E, u, issue, base);
@@ -672,6 +681,14 @@ async function weeklyTick(E) {
       await E.IMAGES.put(WK.sent(u.id, week), res.sent ? 'sent' : 'skipped', { expirationTtl: 14 * 86400 }); sent.push(u.id); } catch (e) { await E.IMAGES.delete(WK.sent(u.id, week)); console.error('weekly', String(e.message || e).slice(0, 200)); } }
   return { week, sent: sent.length };
 }
+// Stale/test-mode customer ids → new live customer (old id kept in KV + customer metadata), then use it.
+async function liveCustomer(c, u) {
+  if (!u.stripe_customer_id) return null; const E = c.env;
+  const r = await stripeCust.ensureCustomer(u, { key: E.STRIPE_SECRET_KEY, get: p => stripeGet(E.STRIPE_SECRET_KEY, p), create: (p, d) => stripeApi(E.STRIPE_SECRET_KEY, p, d),
+    onReplace: async (id, old) => { await db(c).prepare('UPDATE users SET stripe_customer_id=? WHERE id=?').bind(id, u.id).run(); if (old) await E.IMAGES.put(`stripe/oldcust/${u.id}`, JSON.stringify({ old, replacedBy: id, at: Date.now() })); } });
+  if (r.replaced) console.log('stripe customer replaced', u.id); u.stripe_customer_id = r.id; return r.id;
+}
+const who = (cid, u) => cid ? { customer: cid } : { customer_email: u.email };
 // ---- Smart Gift memberships ----
 const syncEnv = async E => { globalThis.process = globalThis.process || { env: {} }; process.env = process.env || {}; for (const [k, v] of Object.entries(E)) if (typeof v === 'string') process.env[k] = v; };
 const appUrlEnv = E => (E.APP_URL || 'https://aichef.food').replace(/\/$/, '');
@@ -701,8 +718,7 @@ app.post('/api/gift/checkout', needAuth, rl('giftco', 10, 600), async c => {
     'payment_intent_data[description]': `AIchef.food gift — ${gp.name}, ${giftMod.termLabel(order.months)} for ${order.recipientName}`.slice(0, 200),
     'metadata[kind]': 'gift', 'metadata[order]': order.id, 'metadata[plan]': order.plan, 'metadata[months]': String(order.months), 'payment_intent_data[metadata][kind]': 'gift', 'payment_intent_data[metadata][order]': order.id,
     success_url: `${base}/gift?order=${order.id}&t=${order.buyerToken}&paid=1`, cancel_url: `${base}/gift?checkout=cancelled` });
-  let s; try { s = await mk(u.stripe_customer_id ? { customer: u.stripe_customer_id } : { customer_email: u.email }); }
-  catch (e) { if (!u.stripe_customer_id || !/No such customer/.test(String(e.message))) throw e; s = await mk({ customer_email: u.email }); }
+  const s = await mk(who(await liveCustomer(c, u), u));
   order.sessionId = s.id; await E.IMAGES.put(`giftorder/${order.id}`, JSON.stringify(order));
   return c.json({ url: s.url, order: order.id });
 });
@@ -726,7 +742,7 @@ app.post('/api/gift/redeem', needAuth, rl('giftred', 10, 600), async c => {
 app.post('/api/billing/portal', needAuth, async c => {
   if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: 'Payments are not configured yet' }, 503);
   const u = c.get('user'); if (!u.stripe_customer_id) return c.json({ error: 'No subscription yet' }, 400);
-  const s = await stripeApi(c.env.STRIPE_SECRET_KEY, 'billing_portal/sessions', { customer: u.stripe_customer_id, return_url: `${appUrl(c)}/account.html` });
+  const s = await stripeApi(c.env.STRIPE_SECRET_KEY, 'billing_portal/sessions', { customer: await liveCustomer(c, u), return_url: `${appUrl(c)}/account.html` });
   return c.json({ url: s.url });
 });
 app.all('/api/*', c => c.json({ error: 'Not found' }, 404));
