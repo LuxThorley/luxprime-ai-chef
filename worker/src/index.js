@@ -654,13 +654,16 @@ app.post('/api/gift/checkout', needAuth, rl('giftco', 10, 600), async c => {
   const order = await giftMod.createOrder(E.IMAGES, p.data, u); const base = appUrl(c); const gp = giftMod.GIFT_PLANS[order.plan];
   let gp2 = {}; try { gp2 = JSON.parse(E.STRIPE_GIFT_PRICES || '{}'); } catch {}
   const giftPrice = gp2[order.plan] && gp2[order.plan][order.months]; const prod = gp2[order.plan] && gp2[order.plan].product;
-  const s = await stripeApi(E.STRIPE_SECRET_KEY, 'checkout/sessions', {
-    mode: 'payment', client_reference_id: String(u.id), ...(u.stripe_customer_id ? { customer: u.stripe_customer_id } : { customer_email: u.email }),
+  // A stored customer from test mode (or a deleted one) must not block a gift: fall back to the buyer's email.
+  const mk = who => stripeApi(E.STRIPE_SECRET_KEY, 'checkout/sessions', {
+    mode: 'payment', client_reference_id: String(u.id), ...who,
     'line_items[0][quantity]': 1, ...(giftPrice ? { 'line_items[0][price]': giftPrice } : { 'line_items[0][price_data][currency]': 'gbp', 'line_items[0][price_data][unit_amount]': order.amount }),
     ...(giftPrice ? {} : prod ? { 'line_items[0][price_data][product]': prod } : { 'line_items[0][price_data][product_data][name]': `Gift: ${gp.name}` }),
     'payment_intent_data[description]': `AIchef.food gift — ${gp.name}, ${giftMod.termLabel(order.months)} for ${order.recipientName}`.slice(0, 200),
     'metadata[kind]': 'gift', 'metadata[order]': order.id, 'metadata[plan]': order.plan, 'metadata[months]': String(order.months), 'payment_intent_data[metadata][kind]': 'gift', 'payment_intent_data[metadata][order]': order.id,
     success_url: `${base}/gift?order=${order.id}&t=${order.buyerToken}&paid=1`, cancel_url: `${base}/gift?checkout=cancelled` });
+  let s; try { s = await mk(u.stripe_customer_id ? { customer: u.stripe_customer_id } : { customer_email: u.email }); }
+  catch (e) { if (!u.stripe_customer_id || !/No such customer/.test(String(e.message))) throw e; s = await mk({ customer_email: u.email }); }
   order.sessionId = s.id; await E.IMAGES.put(`giftorder/${order.id}`, JSON.stringify(order));
   return c.json({ url: s.url, order: order.id });
 });
