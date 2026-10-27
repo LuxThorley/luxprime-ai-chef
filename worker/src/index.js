@@ -19,6 +19,7 @@ import CRmod from '../../src/community-routes.js';
 const CR = CRmod;
 import briefMod from '../../src/brief.js';
 import chat from '../../src/chat.js';
+import memory from '../../src/memory.js';
 import assistant from '../../src/assistant.js';
 import dioscorides from '../../src/dioscorides.js';
 import verifyMod from '../../src/verify.js';
@@ -238,7 +239,9 @@ app.post('/api/chat', rl('chat-ip', 30, 300), needAuth, async c => {
   if (!lim.ok) return c.json({ error: `Malcolm needs a breather — you've reached this hour's chat limit${isPremium(u) ? '' : ' (upgrade for more)'}. Try again in ${Math.ceil(lim.retryAfter / 60)} min.`, retryAfter: lim.retryAfter, ...(isPremium(u) ? {} : { upgrade: '/pricing.html' }) }, 429);
   const mB = String(c.env.MALCOLM_AI_URL || '').replace(/\/+$/, '');
   const fImpl = (url, opts) => (c.env.MALCOLM && mB && String(url).startsWith(mB)) ? c.env.MALCOLM.fetch(new Request(url, opts)) : fetch(url, opts);
-  const out = await chat.respond(req, { llm: chat.malcolmLlm(c.env, fImpl) });
+  const memCtx = await memory.contextFor(cq(c), u.id, req.message).catch(() => '');
+  const out = await chat.respond(req, { llm: memory.withMemory(chat.malcolmLlm(c.env, fImpl), memCtx) });
+  await memory.recordChat(cq(c), u.id, [{ role: 'user', text: req.message }, { role: 'malcolm', text: out.reply }], { surface: 'search-chat', env: c.env }).catch(e => console.error('memory chat', e && e.message));
   const base = { reply: out.reply, action: out.action, suggestions: out.suggestions, chatLeft: lim.left };
   if (out.action !== 'regenerate' || req.recipe) return c.json({ ...base, action: out.action === 'regenerate' ? 'answer' : out.action, context: req.context });
   const s = SearchSchema.safeParse({ ...chat.applyChanges(req.context, out.changes), skipClarify: true });
@@ -282,8 +285,11 @@ app.post('/api/assistant/chat', rl('asst-ip', 40, 300), async c => {
   const lim = await chat.allow(AQ(c), u ? `asst:u${u.id}` : `asst:ip:${c.req.header('cf-connecting-ip') || 'anon'}`, isPremium(u) ? assistant.LIMITS.paid : assistant.LIMITS.free);
   if (!lim.ok) return c.json({ error: `Malcolm needs a breather — try again in ${Math.ceil(lim.retryAfter / 60)} min${isPremium(u) ? '' : ' (members get more chats)'}.`, upgrade: isPremium(u) ? null : '/pricing.html' }, 429);
   const mem = (await asstMemory(c)) || (p.data.localMemory ? assistant.cleanMemory({ ...p.data.localMemory, consent: true }) : null);
-  const llm = asstLlm(c) && (await aiBudget(c, 'chat')) ? asstLlm(c) : null;
-  return c.json({ ...(await assistant.respond(p.data, { llm, mem, u, refs: await asstRefs(c, p.data.message) })), chatLeft: lim.left });
+  const memCtx = u ? await memory.contextFor(cq(c), u.id, p.data.message).catch(() => '') : ''; // signed-out visitors: nothing stored, nothing recalled
+  const llm = asstLlm(c) && (await aiBudget(c, 'chat')) ? memory.withMemory(asstLlm(c), memCtx) : null;
+  const out = await assistant.respond(p.data, { llm, mem, u, refs: await asstRefs(c, p.data.message) });
+  if (u) await memory.recordChat(cq(c), u.id, [{ role: 'user', text: p.data.message }, { role: 'malcolm', text: out.reply }], { surface: 'assistant', env: c.env }).catch(e => console.error('memory chat', e && e.message));
+  return c.json({ ...out, chatLeft: lim.left });
 });
 app.get('/api/assistant/memory', needAuth, async c => c.json({ memory: await asstMemory(c) }));
 app.put('/api/assistant/memory', needAuth, async c => { const m = assistant.cleanMemory(await body(c)); if (!m) return bad(c, assistant.Memory.safeParse(await body(c)).error || {}); await c.env.IMAGES.put(assistant.memKey(c.get('user').id), JSON.stringify(m)); return c.json({ ok: true, memory: m }); });
@@ -316,8 +322,21 @@ app.post('/api/assistant/escalate', rl('asst-esc', 5, 3600), async c => { const 
 
 app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   const p = SearchSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
-  const [st, payload] = await doSearch(c, c.get('user'), p.data); return c.json(payload, st);
+  const u = c.get('user'); let data = p.data;
+  if (c.env.MEMORY_BIAS_SEARCH === 'on') { try { const mc = await memory.getConsent(cq(c), u.id); if (memory.allowed(mc, 'search')) data = memory.biasSearch((await body(c)) || {}, data, await memory.getProfile(cq(c), u.id)); } catch {} }
+  const [st, payload] = await doSearch(c, u, data);
+  if (st === 200 && !payload.clarify) await memory.recordSearch(cq(c), u.id, p.data, { env: c.env }).catch(e => console.error('memory search', e && e.message));
+  return c.json(payload, st);
 });
+// ---- Malcolm personal memory: opt-in, per-member only (src/memory.js). No IPs, no fingerprints, no third parties. ----
+const MH = (h, withBody) => async c => { const r = await memory.H[h](cq(c), c.get('user') || null, withBody ? await body(c) : undefined, c.env); return c.json(r.json, r.status); };
+app.get('/api/memory/consent', MH('consentGet'));
+app.put('/api/memory/consent', rl('mem-consent', 30, 600), needAuth, MH('consentPut', true));
+app.get('/api/memory', needAuth, MH('view'));
+app.get('/api/memory/export', needAuth, async c => { const r = await memory.H.exportJson(cq(c), c.get('user')); const res = c.json(r.json, r.status); res.headers.set('Content-Disposition', 'attachment; filename="malcolm-memory.json"'); res.headers.set('Cache-Control', 'no-store'); return res; });
+app.delete('/api/memory', needAuth, MH('deleteAll'));
+app.post('/api/memory/event', rl('mem-event', 120, 600), MH('event', true));
+app.get('/api/admin/memory-stats', needAuth, async c => isAdmin(c.get('user')) ? c.json(await memory.adminStats(cq(c))) : c.json({ error: 'Admins only' }, 403)); // counts only, never chat text
 
 // Escoffier Classics (public domain, 1907) — browse/search + single entry.
 const d1all = c => async (sql, params) => (await db(c).prepare(sql).bind(...params).all()).results;
@@ -335,6 +354,7 @@ app.post('/api/favourites', needAuth, needPremium, async c => {
   const b = await body(c); const p = RecipeBlob.safeParse(b && b.recipe); if (!p.success) return bad(c, p.error);
   const json = JSON.stringify(p.data); if (json.length > 60000) return c.json({ error: 'Recipe too large' }, 413);
   const x = await cctx(c); x.body = { recipe: p.data };
+  await memory.recordEvent(cq(c), c.get('user').id, { kind: 'recipe_save', ref: p.data.title }, { env: c.env }).catch(() => {});
   return send(c, await CR.H.favAdd(x, async r => db(c).prepare('INSERT INTO favourites(user_id,recipe_id,recipe_json) VALUES(?,?,?) ON CONFLICT(user_id,recipe_id) DO UPDATE SET recipe_json=excluded.recipe_json').bind(c.get('user').id, r.id, JSON.stringify(r)).run()));
 });
 app.delete('/api/favourites/:id', needAuth, needPremium, async c => { await db(c).prepare('DELETE FROM favourites WHERE user_id=? AND recipe_id=?').bind(c.get('user').id, c.req.param('id').slice(0, 120)).run(); CR.bust(); return c.json({ ok: true }); });

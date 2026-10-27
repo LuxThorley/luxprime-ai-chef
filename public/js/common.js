@@ -42,3 +42,6 @@
   }
   window.LP={api,toast,esc,csrf,cooking};
 })();
+
+// Malcolm personal memory (opt-in): consent prompt + first-party signals, signed-in members only.
+(function(){if(/\/memory\.html$/.test(location.pathname))return;const s=document.createElement('script');s.src='/js/memory.js';s.defer=true;document.head.appendChild(s);})();

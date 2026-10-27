@@ -4,7 +4,7 @@ const path = require('path'); const crypto = require('crypto');
 const express = require('express'); const helmet = require('helmet'); const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser'); const bcrypt = require('bcryptjs'); const jwt = require('jsonwebtoken');
 const { z } = require('zod');
-const { open } = require('./db'); const verifyMod = require('./verify'); const chatMod = require('./chat'); const mailer = require('./mailer'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
+const { open } = require('./db'); const verifyMod = require('./verify'); const chatMod = require('./chat'); const memory = require('./memory'); const mailer = require('./mailer'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
 const { plans, isPremium, isAdmin, isTester } = require('./plans'); const images = require('./images');
 const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14, RECIPES } = require('./recipes'); const community = require('./community'); const CR = require('./community-routes'); const briefMod = require('./brief');
 
@@ -163,7 +163,9 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
     const p = chatMod.ChatRequest.safeParse(req.body); if (!p.success) return bad(res, p.error); const u = req.user; const r = p.data;
     const lim = await chatMod.allow(cq, `chat:u${u.id}`, isPremium(u) ? chatMod.LIMITS.paid : chatMod.LIMITS.free);
     if (!lim.ok) return res.status(429).json({ error: `Malcolm needs a breather — you've reached this hour's chat limit${isPremium(u) ? '' : ' (upgrade for more)'}. Try again in ${Math.ceil(lim.retryAfter / 60)} min.`, retryAfter: lim.retryAfter });
-    const out = await chatMod.respond(r, { llm: opts.llm });
+    const memCtx = await memory.contextFor(cq, u.id, r.message);
+    const out = await chatMod.respond(r, { llm: memory.withMemory(opts.llm, memCtx) });
+    await memory.recordChat(cq, u.id, [{ role: 'user', text: r.message }, { role: 'malcolm', text: out.reply }], { surface: 'search-chat' });
     const base = { reply: out.reply, action: out.action, suggestions: out.suggestions, chatLeft: lim.left };
     if (out.action !== 'regenerate' || r.recipe) return res.json({ ...base, action: out.action === 'regenerate' ? 'answer' : out.action, context: r.context });
     const s = SearchSchema.safeParse({ ...chatMod.applyChanges(r.context, out.changes), skipClarify: true });
@@ -174,8 +176,14 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
   }));
   app.post('/api/search', searchLimiter, needAuth, a(async (req, res) => {
     const p = SearchSchema.safeParse(req.body); if (!p.success) return bad(res, p.error);
-    const [st, payload] = await doSearch(req.user, p.data); res.status(st).json(payload);
+    const [st, payload] = await doSearch(req.user, p.data); if (st === 200 && !payload.clarify) await memory.recordSearch(cq, req.user.id, p.data); res.status(st).json(payload);
   }));
+  // ---- Malcolm personal memory (opt-in; see src/memory.js) ----
+  const M = (h, withBody) => a(async (req, res) => { const r = await memory.H[h](cq, req.user || null, withBody ? req.body : undefined, process.env); res.status(r.status).json(r.json); });
+  app.get('/api/memory/consent', M('consentGet')); app.put('/api/memory/consent', needAuth, M('consentPut', true));
+  app.get('/api/memory', needAuth, M('view')); app.get('/api/memory/export', needAuth, (req, res, next) => { res.set('Content-Disposition', 'attachment; filename="malcolm-memory.json"'); next(); }, M('exportJson'));
+  app.delete('/api/memory', needAuth, M('deleteAll')); app.post('/api/memory/event', M('event', true));
+  app.get('/api/admin/memory-stats', needAuth, a(async (req, res) => isAdmin(req.user) ? res.json(await memory.adminStats(cq)) : res.status(403).json({ error: 'Admins only' })));
 
 
   // ---- Dioscorides, De Materia Medica (Medicinal cuisine) ----

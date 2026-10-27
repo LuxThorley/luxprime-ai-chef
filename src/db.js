@@ -19,6 +19,7 @@ function open(file = process.env.DB_PATH || path.join(__dirname, '..', 'data', '
   if (!cols.includes('email_verified')) { db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN verified_at INTEGER'); db.prepare('UPDATE users SET email_verified=1, verified_at=?').run(Date.now()); }
   require('./verify').SCHEMA_SQL.forEach(sql => db.exec(sql));
   require('./community').SCHEMA_SQL.forEach(sql => db.exec(sql));
+  db.exec(fs.readFileSync(path.join(__dirname, '..', 'worker', 'migrations', '0010_malcolm_memory.sql'), 'utf8'));
   loadEscoffier(db);
   return db;
 }
