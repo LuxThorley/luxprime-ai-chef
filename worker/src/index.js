@@ -20,6 +20,7 @@ const CR = CRmod;
 import briefMod from '../../src/brief.js';
 import chat from '../../src/chat.js';
 import memory from '../../src/memory.js';
+import acctEmail from '../../src/account-email.js';
 import assistant from '../../src/assistant.js';
 import dioscorides from '../../src/dioscorides.js';
 import verifyMod from '../../src/verify.js';
@@ -336,6 +337,21 @@ app.get('/api/memory', needAuth, MH('view'));
 app.get('/api/memory/export', needAuth, async c => { const r = await memory.H.exportJson(cq(c), c.get('user')); const res = c.json(r.json, r.status); res.headers.set('Content-Disposition', 'attachment; filename="malcolm-memory.json"'); res.headers.set('Cache-Control', 'no-store'); return res; });
 app.delete('/api/memory', needAuth, MH('deleteAll'));
 app.post('/api/memory/event', rl('mem-event', 120, 600), MH('event', true));
+// ---- Account details, secure email change, magazine delivery address (src/account-email.js). CSRF via global middleware. ----
+const AE = (c, r) => c.json(r.json, r.status);
+app.get('/api/account/details', needAuth, async c => AE(c, await acctEmail.status(cq(c), c.get('user'))));
+app.put('/api/account/profile', rl('profile', 20, 600), needAuth, async c => AE(c, await acctEmail.updateProfile(cq(c), c.get('user'), await body(c))));
+app.post('/api/account/email', rl('email-change', 5, 3600), needAuth, async c => AE(c, await acctEmail.requestChange(cq(c), c.env, c.get('user'), await body(c), { verifyPassword, base: appUrl(c) })));
+app.post('/api/account/email/confirm', rl('email-confirm', 20, 3600), async c => {
+  const sid = getCookie(c, 'lp_session') || '';
+  const r = await acctEmail.confirmChange(cq(c), c.env, String(((await body(c)) || {}).token || ''), {
+    revokeSessions: uid => db(c).prepare('DELETE FROM sessions WHERE user_id=? AND id!=?').bind(uid, sid).run(), // this device stays signed in
+    stripeUpdate: c.env.STRIPE_SECRET_KEY ? (id, email) => stripeApi(c.env.STRIPE_SECRET_KEY, `customers/${id}`, { email }) : null });
+  return AE(c, r);
+});
+app.post('/api/magazine/delivery', rl('mag-delivery', 5, 3600), needAuth, async c => AE(c, await acctEmail.requestDelivery(cq(c), c.env, c.get('user'), await body(c), { base: appUrl(c) })));
+app.post('/api/magazine/delivery/confirm', rl('mag-delivery-c', 20, 3600), async c => AE(c, await acctEmail.confirmDelivery(cq(c), String(((await body(c)) || {}).token || ''))));
+app.delete('/api/magazine/delivery', needAuth, async c => AE(c, await acctEmail.revertDelivery(cq(c), c.get('user'))));
 // "Clear History": user-scoped, authenticated, CSRF-protected (global middleware). D1 deletes run as one atomic batch; KV menus after.
 app.post('/api/account/clear-history', rl('clear-history', 5, 3600), needAuth, async c => {
   const u = c.get('user'); const alsoFavourites = ((await body(c)) || {}).alsoFavourites === true;

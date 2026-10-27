@@ -9,6 +9,7 @@ import { randomId } from './crypto.js';
 import mailer from '../../src/mailer.js';
 import verifyMod from '../../src/verify.js';
 import { effectiveUser } from './members.js';
+import acctEmail from '../../src/account-email.js';
 
 const { isAdmin, isTester } = plansMod;
 export const IMG_MODEL = '@cf/black-forest-labs/flux-1-schnell';
@@ -108,7 +109,7 @@ export async function tick(env, { fetchImpl, base, batch = 1 }) {
       const manageUrl = `${base}/account.html#magazine`;
       const iss = await buildIssue(env, u, { fetchImpl, issueNo: n + 1, manageUrl, allowLibrary: it.attempts >= 2 });
       const token = await storeIssue(env, iss.pdf);
-      const mail = sample ? { sent: false, reason: 'sample' } : await sendIssueEmail(env, { to: u.email, name: iss.profile.name, month: iss.profile.month, year: iss.profile.year, titles: iss.titles, downloadUrl: `${base}/m/issue/${token}`, unsubUrl: `${base}/m/unsubscribe?t=${row && row.unsub_token}`, manageUrl, pdf: iss.pdf });
+      const mail = sample ? { sent: false, reason: 'sample' } : await sendIssueEmail(env, { to: acctEmail.deliveryAddress(u, row), name: iss.profile.name, month: iss.profile.month, year: iss.profile.year, titles: iss.titles, downloadUrl: `${base}/m/issue/${token}`, unsubUrl: `${base}/m/unsubscribe?t=${row && row.unsub_token}`, manageUrl, pdf: iss.pdf });
       await env.DB.prepare("UPDATE magazine_issues SET status=?, token=?, bytes=?, ms=?, error=?, sent_at=CURRENT_TIMESTAMP WHERE id=?").bind(mail.sent ? 'sent' : 'ready', token, iss.pdf.length, iss.ms, mail.sent ? null : mail.reason, it.id).run();
       log.processed.push({ id: it.id, sent: mail.sent, ms: iss.ms });
     } catch (e) {

@@ -4,7 +4,7 @@ const path = require('path'); const crypto = require('crypto');
 const express = require('express'); const helmet = require('helmet'); const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser'); const bcrypt = require('bcryptjs'); const jwt = require('jsonwebtoken');
 const { z } = require('zod');
-const { open } = require('./db'); const verifyMod = require('./verify'); const chatMod = require('./chat'); const memory = require('./memory'); const mailer = require('./mailer'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
+const { open } = require('./db'); const verifyMod = require('./verify'); const chatMod = require('./chat'); const acctEmail = require('./account-email'); const memory = require('./memory'); const mailer = require('./mailer'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
 const { plans, isPremium, isAdmin, isTester } = require('./plans'); const images = require('./images');
 const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14, RECIPES } = require('./recipes'); const community = require('./community'); const CR = require('./community-routes'); const briefMod = require('./brief');
 
@@ -79,10 +79,10 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
   app.get('/api/csrf', (req, res) => res.json({ csrfToken: req.csrfToken }));
 
   // ---- Auth ----
-  const setSession = (res, u) => res.cookie('lp_session', jwt.sign({ uid: u.id }, SECRET, { expiresIn: '30d' }), { httpOnly: true, sameSite: 'lax', secure: prod, maxAge: 30 * 864e5, path: '/' });
+  const setSession = (res, u) => res.cookie('lp_session', jwt.sign({ uid: u.id, ep: u.session_epoch || 0 }, SECRET, { expiresIn: '30d' }), { httpOnly: true, sameSite: 'lax', secure: prod, maxAge: 30 * 864e5, path: '/' });
   app.use((req, res, next) => {
     const t = req.cookies.lp_session;
-    if (t) try { const { uid } = jwt.verify(t, SECRET); req.user = db.prepare('SELECT * FROM users WHERE id=?').get(uid); } catch {}
+    if (t) try { const { uid, ep } = jwt.verify(t, SECRET); const u = db.prepare('SELECT * FROM users WHERE id=?').get(uid); if (u && (ep || 0) === (u.session_epoch || 0)) req.user = u; } catch {}
     next();
   });
   const needAuth = (req, res, next) => req.user ? next() : res.status(401).json({ error: 'Please sign in' });
@@ -183,6 +183,22 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
   app.get('/api/memory/consent', M('consentGet')); app.put('/api/memory/consent', needAuth, M('consentPut', true));
   app.get('/api/memory', needAuth, M('view')); app.get('/api/memory/export', needAuth, (req, res, next) => { res.set('Content-Disposition', 'attachment; filename="malcolm-memory.json"'); next(); }, M('exportJson'));
   app.delete('/api/memory', needAuth, M('deleteAll')); app.post('/api/memory/event', M('event', true));
+  // ---- Account details, email change, magazine delivery address (src/account-email.js) ----
+  const base = req => `${req.protocol}://${req.get('host')}`; const out = (res, r) => res.status(r.status).json(r.json);
+  const emailLimiter = rateLimit({ windowMs: 3600_000, limit: 5, standardHeaders: 'draft-7', legacyHeaders: false });
+  app.get('/api/account/details', needAuth, a(async (req, res) => out(res, await acctEmail.status(cq, req.user))));
+  app.put('/api/account/profile', needAuth, a(async (req, res) => out(res, await acctEmail.updateProfile(cq, req.user, req.body))));
+  app.post('/api/account/email', emailLimiter, needAuth, a(async (req, res) => out(res, await acctEmail.requestChange(cq, mailEnv, req.user, req.body, { verifyPassword: (pw, h) => bcrypt.compare(pw, h || ''), base: base(req), fetchImpl: opts.fetchImpl }))));
+  app.post('/api/account/email/confirm', authLimiter, a(async (req, res) => {
+    const r = await acctEmail.confirmChange(cq, mailEnv, String((req.body || {}).token || ''), { fetchImpl: opts.fetchImpl,
+      revokeSessions: async uid => db.prepare('UPDATE users SET session_epoch=session_epoch+1 WHERE id=?').run(uid),
+      stripeUpdate: stripe ? (id, email) => stripe.customers.update(id, { email }) : null });
+    if (r.status === 200 && req.user && req.user.id === r.userId) setSession(res, db.prepare('SELECT * FROM users WHERE id=?').get(r.userId)); // keep this device signed in
+    out(res, r);
+  }));
+  app.post('/api/magazine/delivery', emailLimiter, needAuth, a(async (req, res) => out(res, await acctEmail.requestDelivery(cq, mailEnv, req.user, req.body, { base: base(req), fetchImpl: opts.fetchImpl }))));
+  app.post('/api/magazine/delivery/confirm', authLimiter, a(async (req, res) => out(res, await acctEmail.confirmDelivery(cq, String((req.body || {}).token || '')))));
+  app.delete('/api/magazine/delivery', needAuth, a(async (req, res) => out(res, await acctEmail.revertDelivery(cq, req.user))));
   app.post('/api/account/clear-history', needAuth, a(async (req, res) => {
     const st = memory.clearHistoryStatements(req.user.id, { alsoFavourites: !!(req.body && req.body.alsoFavourites === true) });
     const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name));
