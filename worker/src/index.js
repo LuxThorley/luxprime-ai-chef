@@ -19,6 +19,7 @@ import CRmod from '../../src/community-routes.js';
 const CR = CRmod;
 import briefMod from '../../src/brief.js';
 import chat from '../../src/chat.js';
+import assistant from '../../src/assistant.js';
 import dioscorides from '../../src/dioscorides.js';
 import verifyMod from '../../src/verify.js';
 import mailer from '../../src/mailer.js';
@@ -246,6 +247,58 @@ app.post('/api/chat', rl('chat-ip', 30, 300), needAuth, async c => {
   if (st !== 200) return c.json({ ...base, action: 'answer', reply: payload.error || out.reply, upgrade: payload.upgrade, context: req.context });
   return c.json({ ...base, context: s.data, search: payload });
 });
+// ---------- Malcolm AI Chef: site-wide assistant (floating widget). Free tiers only: Workers AI free allocation, capped daily; offline library fallback.
+const AQ = c => cq(c);
+async function aiBudget(c, kind) { // daily cap keeps usage inside the Workers AI free allocation
+  const day = new Date().toISOString().slice(0, 10); const lim = kind === 'vision' ? assistant.LIMITS.visionPerDay : assistant.LIMITS.aiPerDay;
+  return (await chat.allow(AQ(c), `asst-ai:${kind}:${day}`, lim, 86400)).ok;
+}
+async function asstMemory(c) { const u = c.get('user'); if (!u) return null; const v = await c.env.IMAGES.get(assistant.memKey(u.id)); return v ? JSON.parse(v) : null; }
+// Persona/character sync: ASSISTANT_SYNC=malcolm routes chat through the Malcolm AI worker's /v1/chat (service binding,
+// MALCOLM_AI_KEY secret, server-side only, 12 s timeout) and falls back to the free Workers AI model, then to the offline library.
+const asstLlm = c => { if (c.env.ASSISTANT_AI === 'off') return null; const model = c.env.ASSISTANT_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast';
+  if (c.env.ASSISTANT_SYNC === 'malcolm' && c.env.MALCOLM_AI_KEY && c.env.MALCOLM_AI_URL) return chat.malcolmLlm({ ...c.env, CHAT_MODEL: model, CHAT_TIMEOUT_MS: c.env.ASSISTANT_TIMEOUT_MS || '12000' }, malcolmFetch(c.env));
+  return c.env.AI ? chat.workersAiLlm({ ...c.env, CHAT_MODEL: model }) : null; };
+async function asstRefs(c, msg) { try { if (!/\b(sauce|stock|classic|french|technique|escoffier|roast|braise|pastry|souffl|consomm|velout|béchamel|bechamel|hollandaise)/i.test(msg)) return []; return (await escoffier.list(d1all(c), { q: msg.slice(0, 100) })).entries.slice(0, 2); } catch { return []; } }
+app.get('/api/assistant/hello', async c => { const u = c.get('user'); const mem = await asstMemory(c); const tier = assistant.tierOf(u);
+  return c.json({ greeting: assistant.greet(u, mem), tier, signedIn: !!u, planName: u ? plansMod.planName(u) : null, features: Object.fromEntries(Object.keys(assistant.FEATURES).map(f => [f, assistant.can(u, f)])), memory: mem, disclosure: assistant.AI_DISCLOSURE, ai: !!asstLlm(c) }); });
+app.post('/api/assistant/chat', rl('asst-ip', 40, 300), async c => {
+  const p = assistant.ChatReq.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user');
+  const lim = await chat.allow(AQ(c), u ? `asst:u${u.id}` : `asst:ip:${c.req.header('cf-connecting-ip') || 'anon'}`, isPremium(u) ? assistant.LIMITS.paid : assistant.LIMITS.free);
+  if (!lim.ok) return c.json({ error: `Malcolm needs a breather — try again in ${Math.ceil(lim.retryAfter / 60)} min${isPremium(u) ? '' : ' (members get more chats)'}.`, upgrade: isPremium(u) ? null : '/pricing.html' }, 429);
+  const mem = (await asstMemory(c)) || (p.data.localMemory ? assistant.cleanMemory({ ...p.data.localMemory, consent: true }) : null);
+  const llm = asstLlm(c) && (await aiBudget(c, 'chat')) ? asstLlm(c) : null;
+  return c.json({ ...(await assistant.respond(p.data, { llm, mem, u, refs: await asstRefs(c, p.data.message) })), chatLeft: lim.left });
+});
+app.get('/api/assistant/memory', needAuth, async c => c.json({ memory: await asstMemory(c) }));
+app.put('/api/assistant/memory', needAuth, async c => { const m = assistant.cleanMemory(await body(c)); if (!m) return bad(c, assistant.Memory.safeParse(await body(c)).error || {}); await c.env.IMAGES.put(assistant.memKey(c.get('user').id), JSON.stringify(m)); return c.json({ ok: true, memory: m }); });
+app.delete('/api/assistant/memory', needAuth, async c => { await c.env.IMAGES.delete(assistant.memKey(c.get('user').id)); return c.json({ ok: true, deleted: true }); });
+app.get('/api/assistant/cook/:id', async c => { const r = assistant.recipeById(c.req.param('id'), +c.req.query('servings') || undefined); return r ? c.json(assistant.cookPlan(r)) : c.json({ error: 'Recipe not found' }, 404); });
+app.post('/api/assistant/fridge', rl('asst-fridge', 20, 600), async c => {
+  const b = (await body(c)) || {}; const u = c.get('user'); const mem = await asstMemory(c); let items = assistant.parseIngredients(String(b.text || '').slice(0, 600)); let via = 'text'; let note = null;
+  if (b.image) {
+    const g = assistant.gate(u, 'fridgePhoto'); if (g) return c.json(g, 402);
+    const m = String(b.image).match(/^data:image\/(png|jpe?g|webp);base64,([A-Za-z0-9+/=]+)$/); if (!m || m[2].length > 2_000_000) return c.json({ error: 'Please send a JPEG/PNG photo under 1.5 MB' }, 400);
+    if (c.env.AI && c.env.ASSISTANT_AI !== 'off' && await aiBudget(c, 'vision')) {
+      try { const bytes = Uint8Array.from(atob(m[2]), ch => ch.charCodeAt(0)); const out = await c.env.AI.run(c.env.VISION_MODEL || '@cf/llava-hf/llava-1.5-7b-hf', { image: [...bytes], prompt: assistant.VISION_PROMPT, max_tokens: 120 });
+        items = [...new Set([...items, ...assistant.parseVision(out && (out.description || out.response))])]; via = 'photo'; } catch (e) { note = 'I couldn’t read the photo just now — type what you have instead.'; }
+    } else note = 'Photo scanning is resting for today (free allowance used) — type what you have and I’ll do the rest.';
+  }
+  if (!items.length) return c.json({ items, recipes: [], via, note: note || 'Tell me a few ingredients, e.g. “chicken, peppers, rice”.' });
+  return c.json({ items, via, note, recipes: assistant.fridgeToPlate(items, { mem }), leftovers: assistant.leftovers(items.join(' ')) });
+});
+app.post('/api/assistant/plan', rl('asst-plan', 20, 600), async c => { const u = c.get('user'); const g = assistant.gate(u, 'mealPlan'); if (g) return c.json(g, 402); const b = (await body(c)) || {};
+  const budget = b.budgetGBP ? Math.max(5, Math.min(500, +b.budgetGBP || 0)) : undefined; if (budget && !assistant.can(u, 'budget')) return c.json(assistant.gate(u, 'budget'), 402);
+  const sv = Math.max(1, Math.min(12, +b.servings || 0)) || undefined; if (sv && sv > 4 && !assistant.can(u, 'householdPlan')) return c.json(assistant.gate(u, 'householdPlan'), 402);
+  return c.json(assistant.mealPlan({ mem: await asstMemory(c), budgetGBP: budget, servings: sv, days: Math.max(1, Math.min(7, +b.days || 7)) })); });
+app.post('/api/assistant/shopping', rl('asst-shop', 30, 600), async c => { const u = c.get('user'); const g = assistant.gate(u, 'shopping'); if (g) return c.json(g, 402); const b = (await body(c)) || {};
+  const ids = (Array.isArray(b.ids) ? b.ids : []).map(String).slice(0, 14); const have = (Array.isArray(b.have) ? b.have : []).map(x => String(x).toLowerCase().slice(0, 40)).slice(0, 30);
+  return c.json({ aisles: assistant.shoppingList(ids, { servings: Math.max(1, Math.min(12, +b.servings || 2)), have }) }); });
+app.post('/api/assistant/escalate', rl('asst-esc', 5, 3600), async c => { const p = assistant.Escalation.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user');
+  const rec = { message: p.data.message, email: (u && u.email) || p.data.email || null, userId: u ? u.id : null, page: String(c.req.header('referer') || '').slice(0, 200), at: new Date().toISOString() };
+  await c.env.IMAGES.put(`asst:esc:${Date.now()}:${randomId(6)}`, JSON.stringify(rec), { expirationTtl: 90 * 86400 });
+  return c.json({ ok: true, mailto: assistant.mailtoEscalation(rec), reply: 'Thanks — I’ve noted that for Oliver. If it’s urgent, tap “Email Oliver” to send it from your own email too.' }); });
+
 app.post('/api/search', rl('search', 20, 60), needAuth, async c => {
   const p = SearchSchema.safeParse(await body(c)); if (!p.success) return bad(c, p.error);
   const [st, payload] = await doSearch(c, c.get('user'), p.data); return c.json(payload, st);

@@ -375,3 +375,35 @@ input[aria-invalid=true]{border-color:#e0786a}
 .tl-bar{display:flex;align-items:center;gap:.5rem;font-size:.68rem;opacity:.8;margin:.4rem 0 .2rem}.tl-bar i{flex:1;height:6px;border-radius:6px;background:linear-gradient(90deg,hsl(130 70% 40%),hsl(90 70% 44%),hsl(48 70% 46%),hsl(25 70% 45%),hsl(5 70% 40%))}
 .info-tip{border:0;background:none;cursor:help;font-size:.95rem;padding:0 .2rem;color:inherit}.tl-src{display:block;font-size:.72rem;font-weight:normal;opacity:.85;margin:.3rem 0;line-height:1.4}
 @media print{.tl{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+
+/* ---------- Malcolm AI Chef floating assistant ---------- */
+.mw{position:fixed;right:16px;bottom:16px;z-index:60;font:inherit}
+.mw-fab{display:flex;align-items:center;gap:8px;border:0;border-radius:999px;padding:12px 18px;min-height:48px;background:var(--saffron,#e8a33d);color:#1b1208;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.35);cursor:pointer}
+.mw-fab span[aria-hidden]{font-size:1.4em}.mw-fab:focus-visible,.mw button:focus-visible,.mw a:focus-visible,.mw input:focus-visible,.mw textarea:focus-visible,.mw select:focus-visible{outline:3px solid var(--gold,#d8b45a);outline-offset:2px}
+.mw.on .mw-fab{display:none}
+.mw-panel{width:min(420px,calc(100vw - 24px));height:min(640px,calc(100dvh - 100px));display:flex;flex-direction:column;background:var(--card,#21152a);color:var(--ink,#f5ecdf);border:1px solid var(--line,#3a2a44);border-radius:18px;box-shadow:0 16px 48px rgba(0,0,0,.45);overflow:hidden}
+.mw-panel[hidden]{display:none}
+.mw-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line,#3a2a44)}.mw-head h2{margin:0;font-size:1.1rem}.mw-sub{margin:0;font-size:.8rem;color:var(--mute,#b9a9c4)}
+.mw-av{font-size:1.8rem}.mw-x{margin-left:auto;background:none;border:0;color:inherit;font-size:1.2rem;min-width:44px;min-height:44px;cursor:pointer}
+.mw-tabs{display:flex;border-bottom:1px solid var(--line,#3a2a44)}.mw-tabs button{flex:1;background:none;border:0;color:inherit;padding:10px 4px;min-height:44px;font-size:.85rem;cursor:pointer;border-bottom:3px solid transparent}
+.mw-tabs [aria-selected=true]{border-bottom-color:var(--saffron,#e8a33d);font-weight:700}
+.mw-body{flex:1;overflow:auto;padding:10px 12px}.mw-pane{display:flex;flex-direction:column;gap:8px;min-height:100%}.mw-pane[hidden]{display:none}
+.mw-log{flex:1;display:flex;flex-direction:column;gap:8px;overflow:auto;min-height:180px}
+.mw-msg{max-width:92%;padding:8px 12px;border-radius:14px;line-height:1.45}.mw-msg p{margin:0 0 4px}.mw-msg.user{align-self:flex-end;background:var(--aub,#4a2c5a)}.mw-msg.malcolm,.mw-msg.typing{align-self:flex-start;background:var(--bg2,#2b1d35)}.mw-msg.typing{opacity:.7;font-style:italic}
+.mw-cards{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:6px}.mw-cards li{font-size:.9rem}.mw-cards a{font-weight:700;color:var(--gold,#d8b45a)}
+.mw-cookbtn{margin-left:4px;font-size:.75rem;padding:4px 8px;min-height:32px;border-radius:999px;border:1px solid var(--saffron,#e8a33d);background:none;color:inherit;cursor:pointer}
+.mw-notes{margin:6px 0 0;padding-left:0;list-style:none;font-size:.82rem;color:var(--mute,#cdbfd6)}
+.mw-chips{display:flex;flex-wrap:wrap;gap:6px}.mw-chips .chip{font-size:.8rem;min-height:36px}
+.mw-form{display:flex;gap:6px;align-items:flex-end}.mw-form textarea{flex:1;resize:none;min-height:44px;max-height:120px;border-radius:12px;padding:10px;font:inherit}
+.mw-mic{min-width:44px;min-height:44px;border-radius:50%;border:1px solid var(--line,#3a2a44);background:none;color:inherit;cursor:pointer}.mw [aria-pressed=true]{background:var(--tomato,#c8452f);color:#fff}
+.mw-step{display:flex;gap:10px;align-items:flex-start;font-size:1.15rem;line-height:1.5;padding:10px;border-radius:12px;background:var(--bg2,#2b1d35)}.mw-n{flex:none;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--saffron,#e8a33d);color:#1b1208;font-weight:800}
+.mw-nav,.mw-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.mw-nav .btn,.mw .btn{min-height:44px}
+.mw-fridge,.mw-week fieldset,.mw-mem{display:grid;gap:8px}.mw-fridge input,.mw-week input,.mw-mem input:not([type=checkbox]),.mw-mem select,.mw-esc textarea,.mw-esc input{min-height:40px;border-radius:10px;padding:6px 10px;font:inherit;width:100%}
+.mw-week fieldset{border:1px solid var(--line,#3a2a44);border-radius:12px;padding:8px}.mw-photo{cursor:pointer;display:inline-flex;align-items:center;min-height:44px}
+.mw-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:.82rem}.mw-mem fieldset{border:1px solid var(--line,#3a2a44);border-radius:12px;padding:8px}
+.mw-week-list{padding-left:18px;margin:0;display:grid;gap:4px;font-size:.9rem}.mw-shoplist h5{margin:8px 0 2px}.mw-shoplist ul{list-style:none;padding:0;margin:0}
+.mw-disc{margin:0;padding:6px 12px;font-size:.72rem;color:var(--mute,#b9a9c4);border-top:1px solid var(--line,#3a2a44)}.small{font-size:.8rem}
+.mw-cook-cta{margin:12px auto;display:block}
+@media (max-width:640px){.mw{right:8px;bottom:76px}.mw.on{inset:0;right:0;bottom:0}.mw.on .mw-panel{width:100vw;height:100dvh;border-radius:0}.mw-fab-t{display:none}.mw-fab{padding:12px}}
+@media (prefers-reduced-motion:reduce){.mw *{transition:none!important;animation:none!important}}
+@media print{.mw{display:none}}
