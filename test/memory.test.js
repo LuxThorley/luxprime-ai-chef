@@ -94,3 +94,32 @@ test('prompt injection size: memory block capped and system message never exceed
   await M.recordChat(q, 1, [{ role: 'user', text: 'new' }]); assert.deepEqual(db.prepare('SELECT text FROM member_chats').all().map(r => r.text), ['new']);
   assert.equal(M.retentionDays({ MEMORY_RETENTION_DAYS: '90' }), 90); assert.equal(M.retentionDays({}), 365);
 });
+
+test('Clear History: CSRF + auth required, clears only this member, keeps essentials; favourites optional', async () => {
+  const db = open(':memory:'); const llm = async () => '{"reply":"Yes.","action":"answer"}';
+  const a = await member(db, llm, 'ch-a@x.co'), b = await member(db, llm, 'ch-b@x.co');
+  const seed = id => { db.prepare("INSERT INTO favourites(user_id,recipe_id,recipe_json) VALUES(?,?,?)").run(id, 'r1', '{"id":"r1","title":"T"}');
+    db.prepare("INSERT INTO user_prefs(user_id,prefs_json,updated_at) VALUES(?,?,?)").run(id, '{}', 1);
+    db.prepare("INSERT INTO recipe_events(recipe_id,actor,kind,day,created_at) VALUES('r1',?,'view',1,1)").run('u:' + id);
+    db.prepare("INSERT INTO ratings(user_id,recipe_id,stars,created_at,updated_at) VALUES(?,'r1',5,1,1)").run(id); };
+  for (const m of [a, b]) { seed(m.id); await m.ag.put('/api/memory/consent').set('x-csrf-token', m.t).send({ chat: true, search: true });
+    await m.ag.post('/api/chat').set('x-csrf-token', m.t).send({ message: 'hello chef' }); await m.ag.post('/api/search').set('x-csrf-token', m.t).send({ include: ['eggs'], dish: 'omelette' }); }
+  assert.ok(count(db, 'history', a.id) > 0);
+  assert.equal((await a.ag.post('/api/account/clear-history').send({})).status, 403); // no CSRF token
+  assert.equal((await request(createApp({ db, stripe: null })).post('/api/account/clear-history').send({})).status, 403);
+  const anon = request.agent(createApp({ db, stripe: null })); const at = (await anon.get('/api/csrf')).body.csrfToken;
+  assert.equal((await anon.post('/api/account/clear-history').set('x-csrf-token', at).send({})).status, 401);
+  const r = await a.ag.post('/api/account/clear-history').set('x-csrf-token', a.t).send({ alsoFavourites: false }); assert.equal(r.status, 200); assert.equal(r.body.favouritesCleared, false);
+  for (const t of ['member_chats', 'member_searches', 'member_profile', 'history', 'user_prefs']) assert.equal(count(db, t, a.id), 0, t);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM recipe_events WHERE actor=?').get('u:' + a.id).n, 0);
+  // Essentials kept
+  assert.equal(count(db, 'favourites', a.id), 1); assert.equal(count(db, 'ratings', a.id), 1); assert.equal(count(db, 'member_consent', a.id), 1);
+  assert.equal(db.prepare('SELECT plan FROM users WHERE id=?').get(a.id).plan, 'monthly'); assert.equal((await a.ag.get('/api/me')).body.user.id, a.id); // still signed in
+  assert.equal((await a.ag.get('/api/memory/consent')).body.consent.chat, true);
+  // Other member untouched
+  for (const t of ['member_chats', 'member_searches', 'member_profile', 'history', 'user_prefs', 'favourites']) assert.ok(count(db, t, b.id) > 0, t);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM recipe_events WHERE actor=?').get('u:' + b.id).n, 1);
+  // Optional favourites
+  await a.ag.post('/api/account/clear-history').set('x-csrf-token', a.t).send({ alsoFavourites: true }); assert.equal(count(db, 'favourites', a.id), 0); assert.equal(count(db, 'favourites', b.id), 1);
+  assert.ok(M.clearHistoryStatements(7).every(([sql, p]) => /WHERE (user_id|actor)=\?/.test(sql) && (p[0] === 7 || p[0] === 'u:7')));
+});

@@ -183,6 +183,12 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
   app.get('/api/memory/consent', M('consentGet')); app.put('/api/memory/consent', needAuth, M('consentPut', true));
   app.get('/api/memory', needAuth, M('view')); app.get('/api/memory/export', needAuth, (req, res, next) => { res.set('Content-Disposition', 'attachment; filename="malcolm-memory.json"'); next(); }, M('exportJson'));
   app.delete('/api/memory', needAuth, M('deleteAll')); app.post('/api/memory/event', M('event', true));
+  app.post('/api/account/clear-history', needAuth, a(async (req, res) => {
+    const st = memory.clearHistoryStatements(req.user.id, { alsoFavourites: !!(req.body && req.body.alsoFavourites === true) });
+    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name));
+    db.transaction(() => { for (const [sql, p] of st) if (tables.has(sql.split(' ')[2])) db.prepare(sql).run(...p); })();
+    CR.bust && CR.bust(); res.json({ ok: true, cleared: true, favouritesCleared: !!(req.body && req.body.alsoFavourites === true) });
+  }));
   app.get('/api/admin/memory-stats', needAuth, a(async (req, res) => isAdmin(req.user) ? res.json(await memory.adminStats(cq)) : res.status(403).json({ error: 'Admins only' })));
 
 

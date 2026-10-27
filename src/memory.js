@@ -156,6 +156,19 @@ const CONSENT_TEXT = {
   behaviour: 'Browsing on AIchef.food: note which pages and recipes I view or save and when I use the Menu Builder or Kitchen Pack. First-party only: no third-party trackers, no IP address, no fingerprinting.',
   retention: 'Kept for up to 12 months, then deleted automatically. Never sold, never used for advertising, never visible to other members or to staff.'
 };
+// "Clear History": one user-scoped batch of deletes (run as a single D1 batch / SQLite transaction).
+// Keeps: account, login/sessions, plan/subscription/Stripe, household (plan_members), consent choices, ratings,
+// paid/monthly magazine issues, community recipes already shared, and favourites unless alsoFavourites is set.
+function clearHistoryStatements(uid, { alsoFavourites = false } = {}) {
+  const st = [['DELETE FROM member_chats WHERE user_id=?', [uid]], ['DELETE FROM member_searches WHERE user_id=?', [uid]], ['DELETE FROM member_events WHERE user_id=?', [uid]],
+    ['DELETE FROM member_profile WHERE user_id=?', [uid]], ['DELETE FROM history WHERE user_id=?', [uid]], ['DELETE FROM user_prefs WHERE user_id=?', [uid]],
+    ['DELETE FROM recipe_events WHERE actor=?', ['u:' + uid]],
+    // Free sample previews are just generated history; today's are kept so clearing can't reset the daily preview allowance.
+    ["DELETE FROM magazine_issues WHERE user_id=? AND kind='preview' AND created_at<date('now')", [uid]]];
+  if (alsoFavourites) st.push(['DELETE FROM favourites WHERE user_id=?', [uid]]);
+  return st;
+}
+const CLEAR_TABLES = ['member_chats', 'member_searches', 'member_events', 'member_profile', 'history', 'user_prefs', 'recipe_events', 'magazine_issues', 'favourites'];
 // Route handlers shared by the Worker (Hono) and the Node server: (q, user, body, env) -> { status, json }.
 const ok = json => ({ status: 200, json }); const need = () => ({ status: 401, json: { error: 'Please sign in' } });
 const H = {
@@ -166,4 +179,4 @@ const H = {
   deleteAll: async (q, u) => { if (!u) return need(); await deleteAll(q, u.id); return ok({ ok: true, deleted: true, consent: await getConsent(q, u.id) }); },
   event: async (q, u, b, env) => u ? ok({ recorded: await recordEvent(q, u.id, b || {}, { env }) }) : ok({ recorded: false })
 };
-module.exports = { H,  CONSENT_VERSION, CONSENT_TEXT, KINDS, LIMITS, retentionDays, getConsent, allowed, setConsent, recordChat, recordSearch, recordEvent, cleanEvent, deriveProfile, refreshProfile, getProfile, relevantChats, profileLine, memoryBlock, withMemory, contextFor, biasSearch, exportAll, deleteAll, adminStats, purge };
+module.exports = { H, clearHistoryStatements, CLEAR_TABLES,  CONSENT_VERSION, CONSENT_TEXT, KINDS, LIMITS, retentionDays, getConsent, allowed, setConsent, recordChat, recordSearch, recordEvent, cleanEvent, deriveProfile, refreshProfile, getProfile, relevantChats, profileLine, memoryBlock, withMemory, contextFor, biasSearch, exportAll, deleteAll, adminStats, purge };

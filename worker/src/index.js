@@ -336,6 +336,17 @@ app.get('/api/memory', needAuth, MH('view'));
 app.get('/api/memory/export', needAuth, async c => { const r = await memory.H.exportJson(cq(c), c.get('user')); const res = c.json(r.json, r.status); res.headers.set('Content-Disposition', 'attachment; filename="malcolm-memory.json"'); res.headers.set('Cache-Control', 'no-store'); return res; });
 app.delete('/api/memory', needAuth, MH('deleteAll'));
 app.post('/api/memory/event', rl('mem-event', 120, 600), MH('event', true));
+// "Clear History": user-scoped, authenticated, CSRF-protected (global middleware). D1 deletes run as one atomic batch; KV menus after.
+app.post('/api/account/clear-history', rl('clear-history', 5, 3600), needAuth, async c => {
+  const u = c.get('user'); const alsoFavourites = ((await body(c)) || {}).alsoFavourites === true;
+  await db(c).batch(memory.clearHistoryStatements(u.id, { alsoFavourites }).map(([sql, p]) => db(c).prepare(sql).bind(...p)));
+  let menus = 0;
+  if (c.env.IMAGES) { // saved/generated menus incl. kitchen packs, their share links, and Malcolm's kitchen-profile memory
+    for (const m of ((await kvJ(c, RK.index(u))) || [])) { const r = await kvJ(c, RK.menu(m.id)); if (r && r.uid === u.id) { await c.env.IMAGES.delete(RK.menu(m.id)); menus++; } if (m.share) await c.env.IMAGES.delete(RK.share(m.share)); }
+    await c.env.IMAGES.delete(RK.index(u)); await c.env.IMAGES.delete(assistant.memKey(u.id));
+  }
+  CR.bust(); return c.json({ ok: true, cleared: true, favouritesCleared: alsoFavourites, menusCleared: menus });
+});
 app.get('/api/admin/memory-stats', needAuth, async c => isAdmin(c.get('user')) ? c.json(await memory.adminStats(cq(c))) : c.json({ error: 'Admins only' }, 403)); // counts only, never chat text
 
 // Escoffier Classics (public domain, 1907) — browse/search + single entry.
