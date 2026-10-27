@@ -154,6 +154,18 @@ function analysisMessages(site, parsed, persona, { kind = 'mine', mine = null } 
     { role: 'user', content: `Website: ${site.url}\nTitle: ${site.title}\nDescription: ${site.description}\nHeadings: ${site.headings.slice(0, 15).join(' | ')}\nDeclared cuisine: ${site.cuisines.join(', ')}\nMenu found:\n${menu || '(no menu parsed)'}\nPage text (excerpt):\n${site.text.slice(0, 3500)}` }];
 }
 function jsonFrom(raw) { const s = String(raw || ''); const a = s.indexOf('{'), b = s.lastIndexOf('}'); if (a < 0 || b <= a) return null; try { return JSON.parse(s.slice(a, b + 1)); } catch { return null; } }
+// Salvage a truncated JSON object (AI output cut off at its token limit): keep every complete value, close open brackets.
+function repairJson(raw) {
+  const whole = jsonFrom(raw); if (whole) return whole;
+  const s = String(raw || ''); const a = s.indexOf('{'); if (a < 0) return null;
+  const cuts = []; const stack = []; let inStr = false, esc = false;
+  for (let i = a; i < s.length; i++) { const ch = s[i];
+    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true; else if (ch === '{' || ch === '[') stack.push(ch === '{' ? '}' : ']');
+    else if (ch === '}' || ch === ']') { stack.pop(); cuts.push([i + 1, stack.slice()]); } }
+  for (let k = cuts.length - 1, n = 0; k >= 0 && n < 60; k--, n++) { const [end, st] = cuts[k]; try { const j = JSON.parse(s.slice(a, end).replace(/,\s*$/, '') + st.reverse().join('')); if (j && typeof j === 'object') return j; } catch {} }
+  return null;
+}
 const strList = (v, n = 6, len = 300) => (Array.isArray(v) ? v : []).map(x => String(typeof x === 'string' ? x : (x && (x.name || x.title || x.idea)) || '').trim().slice(0, len)).filter(Boolean).slice(0, n);
 async function analyse(site, parsed, { llm, persona = '', kind = 'mine', mine = null } = {}) {
   const h = heuristicAnalysis(site, parsed, kind);
@@ -264,9 +276,9 @@ function courseNames(spec) { const pool = DEFAULT_COURSES[spec.menuType] || DEFA
 const perCourse = spec => ['tasting', 'set', 'prix-fixe', 'private-dining'].includes(spec.menuType) && spec.dishesPerCourse > 2 ? spec.dishesPerCourse : spec.dishesPerCourse;
 function builderMessages(spec, ctx, persona) {
   const names = courseNames(spec); const r = spec.refine; const season = r.season === 'now' ? seasonNow() : r.season;
-  return [{ role: 'system', content: `${persona}\nYou are Malcolm, consulting executive chef, composing a restaurant menu for a professional client. British English, UK seasonal produce, menu-card prose (concise, evocative, no clichés). Never include toxic plants or anything unsafe to eat; Dioscorides/medicinal notes are historical food lore only, never health claims. Reply with JSON only:
-{"title":string,"intro":string (1-2 sentences for the top of the card),"courses":[{"name":string,"dishes":[{"name":string,"description":string (max 22 words, key components),"tags":[from ${DIET_TAGS.join('|')}],"price":number|null,"foodCost":number|null,"pairing":string|null,"fromHistory":boolean}]}],"chefNote":string,"rationale":string (2-3 sentences on balance, variety and appeal)}` },
-    { role: 'user', content: [`Venue: ${spec.restaurantName || 'the venue'} (${VENUE_TYPES[spec.venueType]})`, (spec.venueType === 'pub' || spec.venueType === 'bar' || PUB_TYPES.includes(spec.menuType)) && 'Pub/bar context: hearty, generous, honest British pub cooking done brilliantly; prices and portions to suit a pub; menu prose short and friendly.', spec.description && `About the restaurant: ${spec.description}`, `Menu type: ${MENU_TYPES[spec.menuType]}`, `Cuisine/style: ${[...spec.cuisines, spec.style].filter(Boolean).join(', ') || 'chef’s choice'}`,
+  const sys = { role: 'system', content: `${persona}\nYou are Malcolm, consulting executive chef, composing a restaurant menu for a professional client. British English, UK seasonal produce, menu-card prose (concise, evocative, no clichés). Never include toxic plants or anything unsafe to eat; Dioscorides/medicinal notes are historical food lore only, never health claims. Reply with JSON only:
+{"title":string,"intro":string (1-2 sentences for the top of the card),"courses":[{"name":string,"dishes":[{"name":string,"description":string (max 22 words, key components),"tags":[from ${DIET_TAGS.join('|')}],"price":number|null,"foodCost":number|null,"pairing":string|null,"fromHistory":boolean}]}],"chefNote":string,"rationale":string (2-3 sentences on balance, variety and appeal)}` };
+  const user = [`Venue: ${spec.restaurantName || 'the venue'} (${VENUE_TYPES[spec.venueType]})`, (spec.venueType === 'pub' || spec.venueType === 'bar' || PUB_TYPES.includes(spec.menuType)) && 'Pub/bar context: hearty, generous, honest British pub cooking done brilliantly; prices and portions to suit a pub; menu prose short and friendly.', spec.description && `About the restaurant: ${spec.description}`, `Menu type: ${MENU_TYPES[spec.menuType]}`, `Cuisine/style: ${[...spec.cuisines, spec.style].filter(Boolean).join(', ') || 'chef’s choice'}`,
       `Courses (exactly these, in order): ${names.join(' | ')}; ${spec.dishesPerCourse} dish${spec.dishesPerCourse > 1 ? 'es' : ''} per course${spec.menuType === 'tasting' ? ' (for a tasting menu with 1 dish per course, make each a single plate)' : ''}.`,
       `Appeal: ${r.appeal}. Variety: ${r.variety} (avoid repeating main proteins/techniques). Taste profile: ${r.taste}. Season: ${season}. Food cost target: ${r.cost}.`, r.diets.length && `Every course must include at least one dish that is: ${r.diets.join(', ')}.`,
       r.prices ? `Suggest GBP menu prices suited to ${ctx.priceBand || 'the restaurant'}${spec.menuType === 'tasting' || spec.menuType === 'set' || spec.menuType === 'prix-fixe' ? ' (put the per-person price in chefNote and use null for dish prices)' : ''}.` : 'No prices (null).', r.pairings && ((spec.venueType === 'pub' || spec.venueType === 'bar' || PUB_TYPES.includes(spec.menuType)) ? 'Add a suggested drink pairing per dish — ale/beer style, cider, or wine style (style only, no brands; these are non-binding suggestions).' : 'Add a wine or drink pairing per dish (style/grape/region, no brands).'),
@@ -274,8 +286,14 @@ function builderMessages(spec, ctx, persona) {
       spec.pinned.length && `Must feature (refine and elevate) these dishes from the chef’s account history: ${spec.pinned.join('; ')}. Mark them fromHistory true.`,
       ctx.cookbooks && ctx.cookbooks.length && `Cookbook inspiration — borrow style, techniques, pairings and structure only; every dish must be original; never reproduce recipes, dish names or text from these books: ${ctx.cookbooks.map(cookbookBrief).join(' | ')}.`,
       ctx.analysis && `Website analysis: ${ctx.analysis.summary} Ideas: ${(ctx.analysis.ideas || []).slice(0, 3).join(' / ')}`,
-      spec.sourceMenu && (spec.sourceKind === 'benchmark' ? `Benchmark menu (a competitor or inspiration, NOT the client’s): use it only for inspiration and contrast — create original dishes, never reuse its dish names or descriptions verbatim:\n${spec.sourceMenu.slice(0, 4000)}` : `Existing/example menu to explore, develop and elaborate on (keep its identity, raise its ambition):\n${spec.sourceMenu.slice(0, 4000)}`), r.keywords && require('./keywords').promptRule(require('./keywords').parseKeywords(r.keywords)), require('./keywords').cuisineRules(spec.cuisines).join(' '), r.diets.includes('slimming') && require('./keywords').SLIMMING_RULE, ...require('./kitchen').promptRules(spec.budget, spec.kitchen), r.personal && `Personal brief: ${r.personal}`].filter(Boolean).join('\n') }];
+      spec.sourceMenu && (spec.sourceKind === 'benchmark' ? `Benchmark menu (a competitor or inspiration, NOT the client’s): use it only for inspiration and contrast — create original dishes, never reuse its dish names or descriptions verbatim:\n${SRC_MARK}` : `Existing/example menu to explore, develop and elaborate on (keep its identity, raise its ambition):\n${SRC_MARK}`), r.keywords && require('./keywords').promptRule(require('./keywords').parseKeywords(r.keywords)), require('./keywords').cuisineRules(spec.cuisines).join(' '), r.diets.includes('slimming') && require('./keywords').SLIMMING_RULE, ...require('./kitchen').promptRules(spec.budget, spec.kitchen), r.personal && `Personal brief: ${r.personal}`, `COMPLETENESS: return all ${names.length} courses with exactly ${spec.dishesPerCourse} dish${spec.dishesPerCourse > 1 ? 'es' : ''} each (${names.length * spec.dishesPerCourse} dishes in total). Keep descriptions short so the JSON is never cut off.`].filter(Boolean).join('\n');
+  // The Malcolm worker keeps only the first 4000 characters of each message: give the source menu whatever room is left.
+  const room = Math.max(0, USER_MAX - (user.length - SRC_MARK.length)); const content = user.replace(SRC_MARK, () => spec.sourceMenu.slice(0, Math.min(4000, room))).slice(0, USER_MAX);
+  return [sys, { role: 'user', content }];
 }
+const SRC_MARK = '\u0000SOURCE_MENU\u0000', USER_MAX = 3900;
+// Roughly 70 tokens per dish plus the frame; capped so the reply stays fast.
+const menuTokens = spec => Math.min(4000, 700 + spec.courses * spec.dishesPerCourse * (spec.refine.pairings ? 85 : 70));
 // Offline composer: deterministic, uses history + library + course-appropriate templates.
 const TPL = {
   start: [['Heritage beetroot, whipped goat’s curd, hazelnut, aged balsamic', ['vegetarian', 'gluten-free']], ['Seared scallops, cauliflower purée, brown butter, capers', ['gluten-free']], ['Ham hock terrine, piccalilli, toasted sourdough', []], ['Charred leeks, romesco, toasted almonds, chive oil', ['vegan', 'dairy-free', 'gluten-free']], ['Crab on crisp toast, brown crab mayonnaise, apple, fennel', []], ['Chicken liver parfait, spiced fig chutney, brioche', []], ['Burrata, blood orange, pistachio, mint', ['vegetarian', 'gluten-free']], ['Roast squash velouté, sage, toasted seeds', ['vegan', 'gluten-free', 'dairy-free']]],
@@ -283,19 +301,31 @@ const TPL = {
   dessert: [['Dark chocolate delice, salted caramel, crème fraîche', ['vegetarian']], ['Vanilla panna cotta, poached rhubarb, ginger crumb', ['vegetarian']], ['Sticky toffee pudding, clotted cream ice cream', ['vegetarian']], ['Lemon tart, raspberry sorbet, Italian meringue', ['vegetarian']], ['Coconut rice pudding, mango, lime, toasted coconut', ['vegan', 'gluten-free', 'dairy-free']], ['Honey and fennel-seed cake, figs, yoghurt (after Dioscorides)', ['vegetarian']], ['Baked apple, oat crumble, cinnamon custard', ['vegetarian']]],
   other: [['British cheeses, oatcakes, quince, celery', ['vegetarian']], ['Hand-made petits fours', ['vegetarian']], ['Seasonal sorbet, mint', ['vegan', 'gluten-free', 'dairy-free']], ['Buttered seasonal greens, lemon', ['vegetarian', 'gluten-free']], ['Triple-cooked chips, rosemary salt', ['vegan', 'gluten-free', 'dairy-free']], ['Warm sourdough, cultured butter', ['vegetarian']]] };
 const PUB_TPL = { start: [['Scotch egg, piccalilli', ['vegetarian']], ['Ham hock croquettes, mustard mayonnaise', []], ['Pint of prawns, Marie Rose', ['gluten-free']], ['Whitebait, lemon, tartare sauce', []], ['Soup of the day, crusty bread', ['vegetarian']], ['Pork scratchings, Bramley apple sauce', ['gluten-free', 'dairy-free']]],
-  main: [['Beer-battered haddock, chips, mushy peas, tartare', ['dairy-free']], ['Steak and ale pie, mash, greens, gravy', []], ['Roast sirloin of beef, Yorkshire pudding, roast potatoes, gravy', []], ['Cumberland sausages, mash, onion gravy', []], ['Chargrilled burger, smoked cheddar, bacon jam, fries', []], ['Mushroom, leek and ale pie, mash, greens', ['vegetarian']], ['Slow-roast pork belly, crackling, apple sauce', ['gluten-free']], ['Ploughman’s board, mature cheddar, pickles, bread', ['vegetarian']]],
+  main: [['Beer-battered haddock, chips, mushy peas, tartare', ['dairy-free']], ['Steak and ale pie, mash, greens, gravy', []], ['Roast sirloin of beef, Yorkshire pudding, roast potatoes, gravy', []], ['Cumberland sausages, mash, onion gravy', []], ['Chargrilled burger, smoked cheddar, bacon jam, fries', []], ['Wild mushroom and leek ale pie, mash, greens', ['vegetarian']], ['Slow-roast pork belly, crackling, apple sauce', ['gluten-free']], ['Ploughman’s board, mature cheddar, pickles, bread', ['vegetarian']]],
   dessert: [['Sticky toffee pudding, butterscotch, vanilla ice cream', ['vegetarian']], ['Apple and blackberry crumble, custard', ['vegetarian']], ['Treacle tart, clotted cream', ['vegetarian']], ['Eton mess', ['vegetarian', 'gluten-free']], ['Bread and butter pudding', ['vegetarian']]],
   other: [['Chunky chips, sea salt', ['vegan', 'gluten-free', 'dairy-free']], ['Cauliflower cheese', ['vegetarian']], ['Onion rings, ale batter', ['vegan', 'dairy-free']], ['Local cheeses, chutney, crackers', ['vegetarian']], ['Pigs in blankets', ['dairy-free']]] };
+const EXTRA_TPL = {
+  start: [['Cured sea trout, cucumber, dill, horseradish cream', ['gluten-free']], ['Pea and mint soup, crème fraîche', ['vegetarian', 'gluten-free']], ['Smoked mackerel pâté, pickled shallot, rye toast', []], ['Tomato and basil bruschetta, aged balsamic', ['vegan', 'dairy-free']], ['Salt-baked celeriac, truffle, hazelnut', ['vegetarian', 'gluten-free']], ['Duck rillettes, cornichons, toasted sourdough', ['dairy-free']]],
+  main: [['Chalk-stream trout, brown butter, almonds, new potatoes', ['gluten-free']], ['Roast chicken supreme, morels, tarragon cream', ['gluten-free']], ['Venison loin, beetroot, juniper, blackberry jus', ['gluten-free', 'dairy-free']], ['Spiced cauliflower steak, dhal, coriander yoghurt', ['vegetarian', 'gluten-free']], ['Hake, chorizo, white beans, parsley', ['gluten-free', 'dairy-free']], ['Squash and sage risotto, aged parmesan', ['vegetarian', 'gluten-free']]],
+  dessert: [['Blackberry and apple Bakewell tart, clotted cream', ['vegetarian']], ['Poached pear, chocolate sauce, almond tuile', ['vegetarian']], ['Passion fruit posset, shortbread', ['vegetarian']], ['Dark chocolate and olive oil mousse, sea salt', ['vegan', 'dairy-free', 'gluten-free']], ['Rhubarb and custard tart', ['vegetarian']], ['Spiced plum crumble, vanilla ice cream', ['vegetarian']]],
+  other: [['Baron Bigod, truffle honey, walnut bread', ['vegetarian']], ['Stilton, port-soaked figs, oatcakes', ['vegetarian']], ['Cornish Yarg, apple chutney, crackers', ['vegetarian']], ['Goat’s cheese, beetroot, hazelnut', ['vegetarian', 'gluten-free']], ['Salted caramel fudge', ['vegetarian', 'gluten-free']], ['Madeleines, lemon curd', ['vegetarian']], ['Pâtes de fruits', ['vegan', 'gluten-free', 'dairy-free']], ['Blood orange granita', ['vegan', 'gluten-free', 'dairy-free']], ['Elderflower and cucumber sorbet', ['vegan', 'gluten-free', 'dairy-free']], ['Lemon verbena sorbet', ['vegan', 'gluten-free', 'dairy-free']], ['Rosemary focaccia, olive oil', ['vegan', 'dairy-free']], ['Fries, garlic aioli', ['vegetarian', 'dairy-free']], ['Heritage tomato salad, shallot, basil', ['vegan', 'gluten-free', 'dairy-free']], ['Tenderstem broccoli, chilli, garlic', ['vegan', 'gluten-free', 'dairy-free']], ['Truffle and parmesan chips', ['vegetarian', 'gluten-free']], ['Salted chocolate truffles', ['vegetarian', 'gluten-free']], ['Mixed leaf salad, house dressing', ['vegan', 'gluten-free', 'dairy-free']], ['Glazed carrots, honey, thyme', ['vegetarian', 'gluten-free']], ['Spiced nuts and olives', ['vegan', 'gluten-free', 'dairy-free']]] };
+const VARIANTS = ['chef’s variation', 'seasonal twist', 'house style', 'market version', 'Malcolm’s way'];
+const OTHER_FIT = [[/fish|seafood/i, /cod|bass|haddock|trout|hake|scallop|crab|mackerel|prawn|whitebait/i, ['start', 'main']], [/chees/i, /(british|local) cheeses|stilton|yarg|bigod|goat’s cheese/i], [/petit|mignard|coffee|treat/i, /petit|truffles|chocolate|fudge|madeleine|pâtes/i], [/bread|bakery/i, /bread|sourdough|focaccia/i], [/side|veg|trimming|garden/i, /chip|greens|broccoli|salad|carrot|cauliflower|onion|fries|tomato/i], [/intermezzo|sorbet/i, /sorbet|granita/i]];
 const kind = name => /roast|carvery|classic|grill|platter|board|special/i.test(name) && !/trimming|snack/i.test(name) ? 'main' : /start|first|amuse|snack|nibble|small|share|raw|soup|antipasti|entr|bread|to start/i.test(name) ? 'start' : /dessert|sweet|pudding|pre-dessert|dolci/i.test(name) ? 'dessert' : /cheese|petit|mignard|side|intermezzo|digestif|extra|juice|bakery|pastr/i.test(name) ? 'other' : 'main';
 function offlineMenu(spec, ctx = {}) {
   const names = courseNames(spec); const r = spec.refine; const pinned = [...spec.pinned]; const usedNames = new Set(); let seed = [...(spec.restaurantName + spec.menuType + spec.cuisines.join())].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7);
-  const rnd = n => { seed = (seed * 1103515245 + 12345) >>> 0; return seed % n; };
+  const rnd = n => { seed = (seed * 1103515245 + 12345) >>> 0; return seed % n; }; const avoid = ctx.avoid || new Set(); const nk = t => String(t).split(', ')[0].toLowerCase().replace(/[^a-z ]/g, '').trim(); for (const pool of [TPL, PUB_TPL, EXTRA_TPL]) for (const list of Object.values(pool)) for (const [n] of list) if (avoid.has(nk(n))) usedNames.add(n);
   const courses = names.map(name => {
     const k = kind(name); const pub = spec.venueType === 'pub' || spec.venueType === 'bar' || PUB_TYPES.includes(spec.menuType); const pool = (pub ? PUB_TPL : TPL)[k].filter(([n]) => !usedNames.has(n)); const dishes = [];
     for (let i = 0; i < spec.dishesPerCourse; i++) {
       if (pinned.length && (k === 'main' || k === 'start') && i === 0) { const t = pinned.shift(); dishes.push({ name: t, description: 'From your kitchen history, refined for the pass — Malcolm will elevate the garnish and plating.', tags: [], price: null, pairing: null, fromHistory: true }); continue; }
-      let cands = pool.filter(([n]) => !usedNames.has(n)); if (r.diets.length && i === 0) { const d = cands.filter(([, t]) => r.diets.every(x => t.includes(x))); if (d.length) cands = d; }
-      if (!cands.length) break; const [n, tags] = cands[rnd(cands.length)]; usedNames.add(n);
+      let cands = pool.filter(([n]) => !usedNames.has(n));
+      if (!cands.length) cands = [...(pub ? TPL : PUB_TPL)[k], ...EXTRA_TPL[k]].filter(([n]) => !usedNames.has(n)); // same course kind, the other repertoire
+      if (!cands.length) cands = Object.values(EXTRA_TPL).flat().filter(([n]) => !usedNames.has(n));
+      const want = OTHER_FIT.find(([re]) => re.test(name)); let fitBase = null;
+      if (want) { const ok = ([n]) => want[1].test(n.split(', ')[0]) && !usedNames.has(n); const from = Ps => Ps.flatMap(P => [...P[k], ...P.other, ...(want[2] || []).flatMap(x => P[x])]).filter(ok); let fit = from([pub ? PUB_TPL : TPL, EXTRA_TPL]); if (!fit.length) fit = from([pub ? TPL : PUB_TPL]); if (fit.length) cands = fit; else { fitBase = [TPL, PUB_TPL, EXTRA_TPL].flatMap(P => [...P[k], ...P.other]).filter(([n]) => want[1].test(n.split(', ')[0]) && !avoid.has(nk(n))); cands = []; } }
+      if (r.diets.length && i === 0) { const d = cands.filter(([, t]) => r.diets.every(x => t.includes(x))); if (d.length) cands = d; }
+      let n, tags; if (cands.length) [n, tags] = cands[rnd(cands.length)]; else { const all = (fitBase && fitBase.length ? fitBase : (pub ? PUB_TPL : TPL)[k]).filter(([x]) => !avoid.has(nk(x))); let v = 0, base; do { [base, tags] = all[(i + v) % all.length]; n = base.replace(/^([^,]+)/, `$1 (${VARIANTS[v % VARIANTS.length]}${v >= VARIANTS.length ? ' ' + (Math.floor(v / VARIANTS.length) + 1) : ''})`); v++; } while (usedNames.has(n)); } usedNames.add(n);
       const [title, ...rest] = n.split(', '); dishes.push({ name: title, description: rest.join(', '), tags, price: null, pairing: null, fromHistory: false });
     }
     return { name, dishes };
@@ -310,21 +340,37 @@ function offlineMenu(spec, ctx = {}) {
 const safeText = s => { const b = dioscorides.banned(s); return b ? null : s; };
 function normaliseMenu(j, spec) {
   const names = courseNames(spec); if (!j || !Array.isArray(j.courses) || !j.courses.length) return null;
-  const courses = j.courses.slice(0, 12).map((c, i) => ({ name: String((c && c.name) || names[i] || `Course ${i + 1}`).slice(0, 40), dishes: (Array.isArray(c && c.dishes) ? c.dishes : []).slice(0, 8).map(d => ({ name: String((d && d.name) || '').slice(0, 90), description: String((d && d.description) || '').slice(0, 220),
+  const courses = j.courses.slice(0, names.length).map((c, i) => ({ name: String((c && c.name) || names[i] || `Course ${i + 1}`).slice(0, 40), dishes: (Array.isArray(c && c.dishes) ? c.dishes : []).slice(0, spec.dishesPerCourse).map(d => ({ name: String((d && d.name) || '').slice(0, 90), description: String((d && d.description) || '').slice(0, 220),
     tags: (Array.isArray(d && d.tags) ? d.tags : []).map(String).filter(t => DIET_TAGS.includes(t)), price: d && d.price != null && isFinite(+d.price) && +d.price > 0 && +d.price < 1000 ? Math.round(+d.price * 2) / 2 : null, pairing: d && d.pairing ? String(d.pairing).replace(/£\s?\d+(\.\d+)?/g, '').slice(0, 90) : null, fromHistory: !!(d && d.fromHistory), ...(d && isFinite(+d.foodCost) && +d.foodCost > 0 && +d.foodCost < 300 ? { foodCost: Math.round(+d.foodCost * 100) / 100 } : {}) }))
     .filter(d => d.name && safeText(d.name + ' ' + d.description)) })).filter(c => c.dishes.length);
   if (!courses.length) return null;
   return { title: String(j.title || spec.name || MENU_TYPES[spec.menuType]).slice(0, 90), intro: String(j.intro || '').slice(0, 300), courses, chefNote: String(j.chefNote || '').slice(0, 300), rationale: String(j.rationale || '').slice(0, 500), source: 'malcolm' };
 }
-async function buildMenu(spec, ctx = {}, { llm, persona = '' } = {}) {
+// Guarantee the exact shape the chef asked for: every course, in order, with the requested number of dishes.
+// Gaps (AI reply cut short, unsafe/copied dishes removed) are filled from Malcolm's offline repertoire and counted.
+function completeMenu(menu, spec, ctx = {}, avoid = new Set()) {
+  const names = courseNames(spec); const n = spec.dishesPerCourse; const fill = offlineMenu(spec, ctx); let filled = 0;
+  const key = d => String(d.name || '').toLowerCase().replace(/[^a-z ]/g, '').trim(); const used = new Set([...avoid, ...menu.courses.flatMap(c => c.dishes.map(key))]);
+  const courses = names.map((name, i) => {
+    const got = menu.courses[i] || { name, dishes: [] }; const dishes = got.dishes.slice(0, n);
+    const spare = [...((fill.courses.find(c => c.name === name) || fill.courses[i] || { dishes: [] }).dishes), ...fill.courses.flatMap(c => kind(c.name) === kind(name) ? c.dishes : [])];
+    for (const d of spare) { if (dishes.length >= n) break; if (used.has(key(d))) continue; used.add(key(d)); dishes.push({ ...d, filled: true }); filled++; }
+    return { name: spec.courseNames[i] || got.name || name, dishes };
+  });
+  menu.courses = courses.filter(c => c.dishes.length); menu.completion = { courses: names.length, dishesPerCourse: n, expected: names.length * n, got: menu.courses.reduce((a, c) => a + c.dishes.length, 0), filled };
+  if (filled && menu.source === 'malcolm') menu.rationale = `${menu.rationale ? menu.rationale + ' ' : ''}(${filled} dish${filled > 1 ? 'es were' : ' was'} completed from Malcolm’s classical repertoire — regenerate for fully bespoke dishes.)`.trim();
+  return menu;
+}
+async function buildMenu(spec, ctx = {}, { llm, persona = '', timeoutMs = 47000 } = {}) {
   let menu = null;
-  if (llm) { try { menu = normaliseMenu(jsonFrom(await llm(builderMessages(spec, ctx, persona), { maxTokens: 1800 })), spec); } catch {} }
+  if (llm) { try { menu = normaliseMenu(repairJson(await llm(builderMessages(spec, ctx, persona), { maxTokens: menuTokens(spec), timeoutMs })), spec); } catch {} }
   if (menu && spec.sourceKind === 'benchmark' && spec.sourceMenu) { // never copy a benchmark's dishes verbatim
     const theirs = new Set(menuDishes(spec.sourceMenu).map(n => n.toLowerCase().replace(/[^a-z ]/g, '').trim()));
     menu.courses = menu.courses.map(c => ({ ...c, dishes: c.dishes.filter(d => !theirs.has(d.name.toLowerCase().replace(/[^a-z ]/g, '').trim())) })).filter(c => c.dishes.length); if (!menu.courses.length) menu = null; }
   if (menu && ctx.cookbookText) menu.courses = menu.courses.map(c => ({ ...c, dishes: c.dishes.filter(d => !verbatimRisk(d.name + ' ' + d.description, ctx.cookbookText)) })).filter(c => c.dishes.length);
   if (menu && !menu.courses.length) menu = null;
-  menu = menu || offlineMenu(spec, ctx);
+  const avoid = new Set(spec.sourceKind === 'benchmark' && spec.sourceMenu ? menuDishes(spec.sourceMenu).map(n => n.toLowerCase().replace(/[^a-z ]/g, '').trim()) : []);
+  const octx = { ...ctx, avoid }; menu = completeMenu(menu || offlineMenu(spec, octx), spec, octx, avoid);
   if (ctx.cookbooks && ctx.cookbooks.length) menu.inspiredBy = ctx.cookbooks.map(b => b.title).slice(0, 4);
   require('./kitchen').annotate(menu, spec.budget || {});
   menu.budget = spec.budget || {}; menu.kitchen = spec.kitchen || {}; menu.kitchenPlan = require('./kitchen').kitchenPlan(menu, spec.kitchen || {});
@@ -348,6 +394,19 @@ function finaliseDishRecipe(r, menu, ci, di, { cookbookText = '', approximate = 
   return out;
 }
 
+// A library stand-in recipe is only useful if it is recognisably the same dish (else a prep sheet is better).
+const STOP = new Set(['with', 'and', 'the', 'of', 'on', 'in', 'a', 'roast', 'seasonal', 'house', 'style', 'chef', 'fresh']);
+const words = t => String(t || '').toLowerCase().normalize('NFD').replace(/[^a-z ]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !STOP.has(w)).map(w => w.replace(/(es|s)$/, ''));
+const sameDish = (recipeTitle, dishName) => { const a = new Set(words(recipeTitle)); const d = words(dishName); return d.length > 0 && d.filter(w => a.has(w)).length / d.length >= 2 / 3; };
+// Deterministic prep sheet when no full recipe could be written (AI busy, no library match, or time budget used up).
+function prepSheet(menu, ci, di) {
+  const c = menu.courses[ci]; const d = c && c.dishes[di]; if (!d) return null; const parts = String(d.description || '').split(/,\s*|\band\b/).map(x => x.trim()).filter(Boolean);
+  const k = kind(c.name); const mins = { start: 45, main: 90, dessert: 60, other: 30 }[k];
+  return { id: null, title: d.name, menuDish: d.name, course: c.name, approximate: true, placeholder: true, servings: 4, baseServings: 4, prepMinutes: Math.round(mins * 0.6), cookMinutes: Math.round(mins * 0.4), totalMinutes: mins, difficulty: null, allergens: [],
+    ingredients: [d.name.split(/\s+/).slice(-2).join(' '), ...parts].filter(Boolean).slice(0, 10).map(name => ({ name, qty: null, unit: '', display: `${name} — weigh per portion spec` })),
+    steps: [...parts.map(p => ({ text: `Prepare the ${p}: mise en place, portion, label and chill until service.` })), { text: k === 'main' ? 'At service: cook the main element to order, rest, then plate with the garnishes and sauce.' : k === 'dessert' ? 'At service: plate to order from the prepared components; finish and garnish at the pass.' : 'At service: plate to order from the prepared components; season and garnish at the pass.' }],
+    safetyNotes: ['Prep sheet only — the full recipe wasn’t ready. Use “Get full recipe” or “Prepare all recipes” in the Menu Builder, then download the kitchen pack again.', 'Check every component against the UK 14 allergens before service.'] };
+}
 // ---------- PDF ----------
 const hslHex = hsl => { const m = String(hsl).match(/hsl\((\d+)\s+(\d+)%\s+(\d+)%/); if (!m) return '#888888'; const h = +m[1] / 360, sa = +m[2] / 100, l = +m[3] / 100; const q = l < 0.5 ? l * (1 + sa) : l + sa - l * sa, p = 2 * l - q; const t = x => { x = (x + 1) % 1; return x < 1 / 6 ? p + (q - p) * 6 * x : x < 1 / 2 ? q : x < 2 / 3 ? p + (q - p) * (2 / 3 - x) * 6 : p; }; return '#' + [t(h + 1 / 3), t(h), t(h - 1 / 3)].map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join(''); };
 const PC = { paper: '#fbf8f2', ink: '#1d1a17', gold: '#b08a45', gold2: '#d8bd84', mute: '#7a7065', rule: '#d9cdb8', copper: '#a8683e', night: '#16171b' };
@@ -434,7 +493,7 @@ function kitchenPack(doc, menu, recipes, { W, H, linkFor, pages }) {
   const need = h => { if (y + h > bottom) { page(); return true; } return false; };
   page(); pg.text('KITCHEN PACK', M, y + 10, { font: 'sansB', size: 9, spacing: 3, color: K.accent }); pg.text(menu.title, M, y + 44, { font: 'serifB', size: 26, color: K.ink, maxW: CW });
   y += 66; pg.text(`${menu.restaurantName || ''}${menu.restaurantName ? ' · ' : ''}${menu.menuTypeLabel || ''} · costing, brigade, mise en place schedule, full recipes & prep sheets`, M, y, { font: 'sans', size: 9, color: K.mute, maxW: CW }); y += 22;
-  menu.courses.forEach((c, ci) => c.dishes.forEach((d, di) => { const r = recipes[dishKey(ci, di)]; pg.text(`${c.name} — ${d.name}`, M, y, { font: 'serif', size: 10.5, color: K.ink, maxW: CW - 90 }); pg.text(r ? `${r.totalMinutes || '?'} min · serves ${r.servings || r.baseServings || '?'}` : 'recipe not generated', W - M, y, { font: 'sans', size: 8, color: K.mute, align: 'right' }); y += 15; need(15); }));
+  menu.courses.forEach((c, ci) => c.dishes.forEach((d, di) => { need(15); const r = recipes[dishKey(ci, di)]; pg.text(`${c.name} — ${d.name}`, M, y, { font: 'serif', size: 10.5, color: K.ink, maxW: CW - 90 }); pg.text(r ? `${r.placeholder ? 'prep sheet · ' : ''}${r.totalMinutes || '?'} min · serves ${r.servings || r.baseServings || '?'}` : 'recipe not generated', W - M, y, { font: 'sans', size: 8, color: K.mute, align: 'right' }); y += 15; }));
   // Costing + Kitchen Plan
   const KM = require('./kitchen'); KM.annotate(menu, menu.budget || {}); const plan = KM.kitchenPlan(menu, menu.kitchen || {}, recipes);
   y += 10; need(40); pg.text('COSTING (ESTIMATES, GBP)', M, y, { font: 'sansB', size: 7.5, spacing: 1.6, color: K.accent }); y += 14;
@@ -457,13 +516,14 @@ function kitchenPack(doc, menu, recipes, { W, H, linkFor, pages }) {
     const facts = [`Yield: serves ${r.servings || r.baseServings || 4}`, r.prepMinutes != null && `Prep ${r.prepMinutes} min`, r.cookMinutes != null && `Cook ${r.cookMinutes} min`, `Total ${r.totalMinutes || '?'} min`, r.difficulty && `Difficulty: ${r.difficulty}`].filter(Boolean).join('   ·   ');
     pg.text(facts, M, y, { font: 'sansB', size: 8, color: K.ink, maxW: CW }); y += 14;
     const al = (r.allergens || []); pg.text(`Allergens (UK 14): ${al.length ? al.join(', ') : 'none declared — check every label'}`, M, y, { font: 'sans', size: 8, color: al.length ? '#9b2c2c' : K.mute, maxW: CW }); y += 12;
-    { const N = require('./nutrition'); N.attach(r); const n = r.nutrition, L = n.lights, ps = n.perServing, f = x => (Math.round(x * 10) / 10).toFixed(1);
+    if (!r.placeholder) { const N = require('./nutrition'); N.attach(r); const n = r.nutrition, L = n.lights, ps = n.perServing, f = x => (Math.round(x * 10) / 10).toFixed(1);
       y += 4; pg.text(`GUIDE NUTRITION (ESTIMATED) — serves ${n.servings}, ~${n.portionG} g per serving, dish ~${n.totalWeightG} g`, M, y, { font: 'sansB', size: 7, spacing: 1, color: K.accent, maxW: CW }); y += 11;
       const cells = [['Energy', `${f(ps.energyKcal)} kcal`, L.energy], ['Fat', f(ps.fatG) + ' g', L.fatG], ['Saturates', f(ps.saturatesG) + ' g', L.saturatesG], ['Carbs', f(ps.carbohydrateG) + ' g', null], ['Sugars', f(ps.sugarsG) + ' g', L.sugarsG], ['Salt', f(ps.saltG) + ' g', L.saltG], ['Fibre', f(ps.fibreG) + ' g', L.fibreG], ['Protein', f(ps.proteinG) + ' g', L.proteinG]];
       const cw = CW / 8; cells.forEach(([k, v, l], i) => { const x = M + i * cw; const col = l && !l.neutral ? hslHex(l.colour) : '#efe7da'; pg.rect(x + 1, y, cw - 2, 34, col); const tc = l && !l.neutral ? '#ffffff' : K.ink;
         pg.text(k.toUpperCase(), x + cw / 2, y + 9, { font: 'sansB', size: 6, color: tc, align: 'center' }); pg.text(v, x + cw / 2, y + 20, { font: 'sansB', size: 7.5, color: tc, align: 'center', maxW: cw - 4 }); pg.text(i ? (l ? (l.label === 'MEDIUM' ? 'MED' : l.label) : '') : `${f(ps.energyKj)} kJ · ${l.label}`, x + cw / 2, y + 30, { font: 'sans', size: 6, color: tc, align: 'center' }); });
       y += 44; y = pg.para(`Per 100 g: ${f(n.per100g.energyKcal)} kcal · fat ${f(n.per100g.fatG)} g · saturates ${f(n.per100g.saturatesG)} g · sugars ${f(n.per100g.sugarsG)} g · salt ${f(n.per100g.saltG)} g · whole dish ${f(n.total.energyKj)} kJ / ${f(n.total.energyKcal)} kcal. Colours: FSA/DHSC 2016 front-of-pack; %RI EU 1169/2011.`, M, y, CW, { font: 'sans', size: 6.8, color: K.mute }) ; y += 6; }
-    if (r.approximate) { pg.text('Malcolm was busy — this is the closest library recipe; regenerate it from the Menu Builder.', M, y, { font: 'sans', size: 7.5, color: '#9b2c2c', maxW: CW }); y += 12; }
+    if (r.placeholder) { pg.text('PREP SHEET — components from the menu card; the full recipe and guide nutrition will appear once Malcolm has written it.', M, y + 4, { font: 'sansB', size: 7.5, color: '#9b2c2c', maxW: CW }); y += 16; }
+    else if (r.approximate) { pg.text('Malcolm was busy — this is the closest library recipe; regenerate it from the Menu Builder.', M, y, { font: 'sans', size: 7.5, color: '#9b2c2c', maxW: CW }); y += 12; }
     y += 8; pg.text('INGREDIENTS', M, y, { font: 'sansB', size: 7.5, spacing: 1.6, color: K.accent }); y += 14;
     const ings = (r.ingredients || []).map(i => i.display || [i.qty, i.unit && i.unit !== 'x' ? i.unit : '', i.name].filter(Boolean).join(' ')); const half = Math.ceil(ings.length / 2); const colW = CW / 2 - 10;
     for (let i = 0; i < half; i++) { need(13); pg.text('• ' + ings[i], M, y, { font: 'serif', size: 9.5, color: K.ink, maxW: colW }); if (ings[i + half]) pg.text('• ' + ings[i + half], M + CW / 2, y, { font: 'serif', size: 9.5, color: K.ink, maxW: colW }); y += 13; }
@@ -476,4 +536,4 @@ function kitchenPack(doc, menu, recipes, { W, H, linkFor, pages }) {
     if (d.pairing) { y += 6; need(14); pg.text(`Suggested pairing: ${d.pairing}`, M, y, { font: 'sans', size: 8, color: K.mute, maxW: CW }); }
   }));
 }
-module.exports = { kitchenMod: require('./kitchen'), dishKey, dishQuery, finaliseDishRecipe, kitchenPack, VENUE_TYPES, DESIGNS, PUB_TYPES, THEMES, cookbookHeuristic, analyseCookbook, verbatimRisk, sourcesOf, menuDishes, searchContext, applySearchContext, checkUrl, safeFetch, readCapped, extractSite, htmlToText, parseMenuText, pdfText, heuristicAnalysis, analyse, historyItems, smartSearch, SearchOpts, MenuSpec, MENU_TYPES, DIET_TAGS, courseNames, builderMessages, offlineMenu, normaliseMenu, buildMenu, menuPdf, seasonNow, jsonFrom, MAX_BYTES };
+module.exports = { sameDish, repairJson, completeMenu, menuTokens, prepSheet, kitchenMod: require('./kitchen'), dishKey, dishQuery, finaliseDishRecipe, kitchenPack, VENUE_TYPES, DESIGNS, PUB_TYPES, THEMES, cookbookHeuristic, analyseCookbook, verbatimRisk, sourcesOf, menuDishes, searchContext, applySearchContext, checkUrl, safeFetch, readCapped, extractSite, htmlToText, parseMenuText, pdfText, heuristicAnalysis, analyse, historyItems, smartSearch, SearchOpts, MenuSpec, MENU_TYPES, DIET_TAGS, courseNames, builderMessages, offlineMenu, normaliseMenu, buildMenu, menuPdf, seasonNow, jsonFrom, MAX_BYTES };

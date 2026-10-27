@@ -151,9 +151,9 @@ function malcolmLlm(env, fetchImpl = fetch) {
   const base = String((env && env.MALCOLM_AI_URL) || '').replace(/\/+$/, '').replace(/\/(omni\/command|v1\/recipes)$/, '');
   const wai = workersAiLlm(env);
   if (!base || !env.MALCOLM_AI_KEY) return wai;
-  return async (messages, { maxTokens = LIMITS.maxTokens } = {}) => {
+  return async (messages, { maxTokens = LIMITS.maxTokens, timeoutMs } = {}) => {
     try {
-      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), +env.CHAT_TIMEOUT_MS || 30000);
+      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs || +env.CHAT_TIMEOUT_MS || 30000);
       try {
         const r = await fetchImpl(base + '/v1/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.MALCOLM_AI_KEY}` }, body: JSON.stringify({ system: messages[0].content, messages: messages.slice(1), maxTokens }) });
         if (!r.ok) throw new Error(`Malcolm chat HTTP ${r.status}`);

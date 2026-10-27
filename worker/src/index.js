@@ -618,26 +618,34 @@ app.post('/api/restaurant/menus', rl('resto-menu', 12, 600), needAuth, needResto
 });
 // Full recipe for one menu dish (Malcolm), stored with the menu, in the shared recipe store (for /recipe.html) and in account history.
 async function dishRecipe(c, u, rec, ci, di, { force = false } = {}) {
-  const key = restaurant.dishKey(ci, di); rec.recipes = rec.recipes || {}; if (rec.recipes[key] && !force) return rec.recipes[key];
+  const key = restaurant.dishKey(ci, di); rec.recipes = rec.recipes || {}; if (rec.recipes[key] && !rec.recipes[key].placeholder && !force) return rec.recipes[key];
   const q = restaurant.dishQuery(rec.menu, ci, di); if (!q) return null;
   const books = (rec.spec && rec.spec.useCookbooks) ? ((await getProfile(c, u)).sources || []).filter(x => x.kind === 'cookbook') : [];
   const cookbookText = books.length ? (await Promise.all(books.map(b => c.env.IMAGES.get(RK.book(u, b.id))))).filter(Boolean).join('\n').slice(0, 600000) : '';
   let references = []; try { if (q.inspirationMode !== 'dioscorides') references = await escoffier.references(d1all(c), q, {}); } catch {}
   const out = await ai.generate(q, { fetchImpl: malcolmFetch(c.env), retries: 0, references });
-  const r0 = out.recipes && out.recipes[0]; if (!r0) return null;
+  const r0 = out.recipes && out.recipes[0]; if (!r0) { const ps = restaurant.prepSheet(rec.menu, ci, di); if (ps && !rec.recipes[key]) rec.recipes[key] = ps; return null; }
+  if ((out.source === 'offline' || out.fallbackReason) && !restaurant.sameDish(r0.title, rec.menu.courses[ci].dishes[di].name)) { const ps = restaurant.prepSheet(rec.menu, ci, di); if (ps && (!rec.recipes[key] || rec.recipes[key].placeholder)) rec.recipes[key] = ps; return null; }
   let r = restaurant.finaliseDishRecipe({ ...r0, image: imagesMod.curatedImage(r0), safetyNotes: safetyNotes(r0, q) }, rec.menu, ci, di, { cookbookText, approximate: out.source === 'offline' || !!out.fallbackReason });
   r = { ...r, id: community.aiId(r) };
   try { await community.upsertRecipe(cq(c), r, u.id); } catch (e) { console.error('dish upsert', e && e.message); }
   try { await db(c).prepare('INSERT INTO history(user_id,query_json,titles) VALUES(?,?,?)').bind(u.id, JSON.stringify({ include: [], dish: `${rec.menu.title}: ${r.menuDish}`, menuBuilder: true }), `${r.menuDish} (menu: ${rec.menu.title})`).run(); } catch {}
   rec.recipes[key] = r; rec.menu.courses[ci].dishes[di].recipeId = r.id; return r;
 }
-const recipeLink = (c, rec) => key => { const r = rec.recipes && rec.recipes[key]; return r ? `${appUrl(c)}/recipe.html?id=${encodeURIComponent(r.id)}` : null; };
-async function allRecipes(c, u, rec, max = 16) {
-  const keys = rec.menu.courses.flatMap((co, ci) => co.dishes.map((_, di) => [ci, di])).slice(0, max).filter(([ci, di]) => !(rec.recipes || {})[restaurant.dishKey(ci, di)]);
-  for (let i = 0; i < keys.length; i += 3) await Promise.all(keys.slice(i, i + 3).map(([ci, di]) => dishRecipe(c, u, rec, ci, di).catch(e => console.error('dish recipe', e && e.message))));
+const recipeLink = (c, rec) => key => { const r = rec.recipes && rec.recipes[key]; return r && r.id ? `${appUrl(c)}/recipe.html?id=${encodeURIComponent(r.id)}` : null; };
+// Every dish gets a sheet: full recipes are written 4 at a time within a time budget (so the PDF download never times out);
+// anything not ready in time gets a deterministic prep sheet marked as such, replaced next time "Prepare all recipes" runs.
+async function allRecipes(c, u, rec, { max = 48, budgetMs = 50000, parallel = 4 } = {}) {
+  rec.recipes = rec.recipes || {}; const t0 = Date.now();
+  const all = rec.menu.courses.flatMap((co, ci) => co.dishes.map((_, di) => [ci, di])).slice(0, max);
+  const queue = all.filter(([ci, di]) => { const r = rec.recipes[restaurant.dishKey(ci, di)]; return !r || r.placeholder; });
+  const worker = async () => { while (queue.length) { const left = budgetMs - (Date.now() - t0); if (left < 3000) return; const [ci, di] = queue.shift();
+    await Promise.race([dishRecipe(c, u, rec, ci, di).catch(e => console.error('dish recipe', e && e.message)), new Promise(r => setTimeout(r, left))]); } };
+  await Promise.all(Array.from({ length: parallel }, worker));
+  for (const [ci, di] of all) { const k = restaurant.dishKey(ci, di); if (!rec.recipes[k]) { const ps = restaurant.prepSheet(rec.menu, ci, di); if (ps) rec.recipes[k] = ps; } }
 }
 const ownMenu = async c => { const r = await kvJ(c, RK.menu(String(c.req.param('id')).slice(0, 20))); return r && r.uid === c.get('user').id ? r : null; };
-app.get('/api/restaurant/menus/:id', needAuth, needResto, async c => { const r = await ownMenu(c); return r ? c.json({ id: c.req.param('id'), menu: r.menu, spec: r.spec, share: r.share || null, shareRecipes: r.shareRecipes !== false, recipes: Object.fromEntries(Object.entries(r.recipes || {}).map(([k, v]) => [k, { id: v.id, title: v.title, totalMinutes: v.totalMinutes, approximate: v.approximate }])) }) : c.json({ error: 'Not found' }, 404); });
+app.get('/api/restaurant/menus/:id', needAuth, needResto, async c => { const r = await ownMenu(c); return r ? c.json({ id: c.req.param('id'), menu: r.menu, spec: r.spec, share: r.share || null, shareRecipes: r.shareRecipes !== false, recipes: Object.fromEntries(Object.entries(r.recipes || {}).map(([k, v]) => [k, { id: v.id, title: v.title, totalMinutes: v.totalMinutes, approximate: v.approximate, placeholder: !!v.placeholder }]).filter(([, v]) => v.id)) }) : c.json({ error: 'Not found' }, 404); });
 app.post('/api/restaurant/menus/:id/dish/:ci/:di/recipe', rl('resto-dish', 40, 600), needAuth, needResto, async c => {
   const rec = await ownMenu(c); if (!rec) return c.json({ error: 'Not found' }, 404); const ci = +c.req.param('ci'), di = +c.req.param('di');
   if (!rec.menu.courses[ci] || !rec.menu.courses[ci].dishes[di]) return c.json({ error: 'Not found' }, 404);
@@ -646,7 +654,8 @@ app.post('/api/restaurant/menus/:id/dish/:ci/:di/recipe', rl('resto-dish', 40, 6
 });
 app.post('/api/restaurant/menus/:id/recipes', rl('resto-dish-all', 6, 600), needAuth, needResto, async c => {
   const rec = await ownMenu(c); if (!rec) return c.json({ error: 'Not found' }, 404); await allRecipes(c, c.get('user'), rec); await kvPut(c, RK.menu(c.req.param('id')), rec);
-  return c.json({ recipes: Object.fromEntries(Object.entries(rec.recipes || {}).map(([k, v]) => [k, { id: v.id, title: v.title, totalMinutes: v.totalMinutes, approximate: v.approximate }])) });
+  const list = Object.entries(rec.recipes || {}); const ready = list.filter(([, v]) => v.id);
+  return c.json({ recipes: Object.fromEntries(ready.map(([k, v]) => [k, { id: v.id, title: v.title, totalMinutes: v.totalMinutes, approximate: v.approximate }])), total: rec.menu.courses.reduce((a, co) => a + co.dishes.length, 0), ready: ready.length, prepSheets: list.length - ready.length });
 });
 app.delete('/api/restaurant/menus/:id', needAuth, needResto, async c => {
   const r = await ownMenu(c); if (!r) return c.json({ error: 'Not found' }, 404); const id = c.req.param('id'); const u = c.get('user');

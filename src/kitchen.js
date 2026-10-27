@@ -14,7 +14,7 @@ const Kitchen = z.object({ chefs: z.enum(['', ...Object.keys(CHEFS)]).default(''
 const BASE = { start: 2.4, main: 4.6, dessert: 1.9, other: 1.6 };
 const SRC_X = { '': 1, economy: 0.7, mid: 1, premium: 1.55, luxury: 2.6 };
 const GP_DEFAULT = { '': 70, value: 65, mid: 70, premium: 72, fine: 75 };
-const kindOf = name => { const n = String(name).toLowerCase(); return /start|snack|small|soup|raw|amuse|nibble|platter|board|share/.test(n) ? 'start' : /pud|dessert|sweet|pastry|petits|cheese/.test(n) ? 'dessert' : /side|bread|extra|veg|trimming/.test(n) ? 'other' : 'main'; };
+const kindOf = name => { const n = String(name).toLowerCase(); return /start|first|entr[ée]e|antipast|snack|small|soup|raw|amuse|nibble|platter|board|share|cold/.test(n) ? 'start' : /pud|dessert|sweet|pastry|petit|mignard|intermezzo|sorbet|cheese/.test(n) ? 'dessert' : /side|bread|extra|veg|trimming/.test(n) ? 'other' : 'main'; };
 const r50 = x => Math.max(0.5, Math.round(x * 2) / 2);
 const gpOf = b => b.gpTarget || (b.foodCostPct ? 100 - b.foodCostPct : GP_DEFAULT[b.pricing || '']);
 // UK menu prices include 20% VAT; GP is calculated on the net (ex-VAT) price.

@@ -48,7 +48,7 @@ test('Menu Builder: spec validation, offline menu honours courses/dishes/diets/p
   assert.ok(m.courses[0].dishes[0].fromHistory); assert.ok(m.courses.slice(1).every(c => c.dishes[0].tags.includes('vegan'))); assert.ok(m.courses.flatMap(c => c.dishes).every(d => d.price > 0));
   const t = R.offlineMenu(R.MenuSpec.parse({ menuType: 'tasting', courses: 7, dishesPerCourse: 1 }), {}); assert.equal(t.courses.length, 7); assert.match(t.chefNote, /per person/);
   const bad = JSON.stringify({ title: 'Spring', courses: [{ name: 'Starters', dishes: [{ name: 'Hemlock soup', description: 'x' }, { name: 'Pea velouté', description: 'mint', tags: ['vegan', 'evil'], price: '9', pairing: 'Muscadet £30' }] }] });
-  const out = await R.buildMenu(spec, {}, { llm: async () => bad }); assert.equal(out.source, 'malcolm'); assert.deepEqual(out.courses[0].dishes.map(d => d.name), ['Pea velouté']);
+  const out = await R.buildMenu(spec, {}, { llm: async () => bad }); assert.equal(out.source, 'malcolm'); assert.deepEqual(out.courses[0].dishes.filter(d => !d.filled).map(d => d.name), ['Pea velouté']);
   assert.deepEqual(out.courses[0].dishes[0].tags, ['vegan']); assert.equal(out.courses[0].dishes[0].price, 9); assert.doesNotMatch(out.courses[0].dishes[0].pairing, /£/);
   assert.equal((await R.buildMenu(spec, {}, { llm: async () => { throw new Error('busy'); } })).source, 'offline');
   const msgs = R.builderMessages(R.MenuSpec.parse({ cuisines: ['Medicinal'], sourceMenu: 'Starters\nSoup £5' }), {}, ''); assert.match(msgs[1].content, /Dioscorides/); assert.match(msgs[1].content, /Soup £5/);
@@ -96,7 +96,7 @@ test('benchmark analysis + builder: comparison framing, never copies benchmark d
   const spec = R.MenuSpec.parse({ sourceKind: 'benchmark', sourceMenu: 'Mains\nConfit duck leg £21\nRoast cod, mussels £23', courses: 1, dishesPerCourse: 2 });
   assert.match(R.builderMessages(spec, {}, '')[1].content, /NOT the client’s/);
   const out = await R.buildMenu(spec, {}, { llm: async () => JSON.stringify({ title: 'X', courses: [{ name: 'Mains', dishes: [{ name: 'Confit Duck Leg', description: 'copied' }, { name: 'Salt-baked celeriac', description: 'original' }] }] }) });
-  assert.deepEqual(out.courses[0].dishes.map(d => d.name), ['Salt-baked celeriac']);
+  assert.deepEqual(out.courses[0].dishes.filter(d => !d.filled).map(d => d.name), ['Salt-baked celeriac']);
 });
 test('cookbook benchmarks: style-only analysis, verbatim guard, credited, search uses analysis not text', async () => {
   const book = 'Slow braised lamb shoulder with anchovy, garlic and rosemary, cooked gently for five hours until it falls apart. '.repeat(3) + 'Roast pears with honey and thyme. Braise the fennel with orange. Pickle the shallots.';
@@ -105,7 +105,7 @@ test('cookbook benchmarks: style-only analysis, verbatim guard, credited, search
   assert.equal(R.verbatimRisk('Lamb, cooked gently for five hours until it falls apart', book), true); assert.equal(R.verbatimRisk('Hay-smoked lamb rump, rosemary, anchovy butter', book), false);
   const spec = R.MenuSpec.parse({ courses: 1, dishesPerCourse: 2 });
   const out = await R.buildMenu(spec, { cookbooks: [{ ...a, title: 'The Slow Kitchen' }], cookbookText: book }, { llm: async m => { assert.match(m[1].content, /never reproduce recipes/); return JSON.stringify({ title: 'X', courses: [{ name: 'Mains', dishes: [{ name: 'Lamb shoulder', description: 'braised with anchovy, garlic and rosemary, cooked gently for five hours until it falls apart' }, { name: 'Fennel tarte tatin', description: 'orange caramel' }] }] }); } });
-  assert.deepEqual(out.courses[0].dishes.map(d => d.name), ['Fennel tarte tatin']); assert.deepEqual(out.inspiredBy, ['The Slow Kitchen']);
+  assert.deepEqual(out.courses[0].dishes.filter(d => !d.filled).map(d => d.name), ['Fennel tarte tatin']); assert.deepEqual(out.inspiredBy, ['The Slow Kitchen']);
   const pdf = Buffer.from(R.menuPdf(out, fonts())).toString('latin1'); assert.ok(pdf.includes('%%EOF'));
   const ctx = R.searchContext({ useInSearch: true, sources: [{ id: 'b', kind: 'cookbook', name: 'The Slow Kitchen', analysis: a, useInSearch: true }] });
   assert.match(ctx.text, /style only/); assert.doesNotMatch(ctx.text, /five hours/); assert.deepEqual(ctx.inspiredBy, ['The Slow Kitchen']);
