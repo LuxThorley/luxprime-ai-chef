@@ -252,7 +252,9 @@ function unwrapReply(s) {
       const strs = Object.entries(j).filter(([, v]) => typeof v === 'string' && v.trim()); if (strs.length) return strs.map(([k, v]) => strs.length > 1 && v.length < 60 ? `${k.replace(/_/g, ' ')}: ${v}` : v).join('. ').replace(/\.\./g, '.'); } return null; };
   let t = String(s || '').trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
   for (let i = 0; i < 3 && /^[\[{]/.test(t); i++) { try { const v = pick(JSON.parse(t)); if (!v) break; t = v.trim(); } catch { const m = t.match(/"(?:reply|response|message|answer|text|content)"\s*:\s*"((?:[^"\\]|\\.)*)/); if (m) { try { t = JSON.parse('"' + m[1] + '"'); } catch { t = m[1]; } } break; } }
-  return t;
+  // Drop leftover leading labels like "recipe: Chicken Fajitas." / "Answer:" / "Malcolm:".
+  t = t.replace(/^\s*(?:recipe|dish|answer|reply|response|malcolm|chef|title)\s*:\s*(?:[^.!?\n]{1,80}[.!?]\s+(?=[A-Z]))?/i, '');
+  return t.trim();
 }
 const DONT_KNOW = 'Honestly, I don’t know that one — I’d rather not guess. Shall I pass the question to Oliver?';
 async function respond(req, { llm, mem, u, refs = [] } = {}) {
