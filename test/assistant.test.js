@@ -103,3 +103,9 @@ test('unwraps JSON-wrapped model replies', () => {
   assert.strictEqual(A.unwrapReply('{"response": "Cut off mid'), 'Cut off mid');
   assert.strictEqual(A.unwrapReply('Plain text.'), 'Plain text.');
 });
+test('unwraps live Malcolm-sync shapes', () => {
+  assert.strictEqual(A.unwrapReply('[ { "chef": "Malcolm", "response": "Whisk in boiling water." } ]'), 'Whisk in boiling water.');
+  assert.strictEqual(A.unwrapReply('{ "message": "No peanuts for you." }'), 'No peanuts for you.');
+  assert.match(A.unwrapReply('{ "recipe": "Chicken Fajitas", "description": "Sizzling strips of chicken.", "prep_and_cook_time": "25 minutes" }'), /^Sizzling strips/);
+  assert.strictEqual(A.unwrapReply('```json\n{"reply":"Hi."}\n```'), 'Hi.');
+});

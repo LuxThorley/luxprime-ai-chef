@@ -245,7 +245,15 @@ Reply in 1-5 sentences of plain prose only — no JSON, no markdown headers, no 
 // llm(messages, {maxTokens}) -> string ; optional.
 const SITEQ = /\b(you|your|site|aichef|account|plan|price|deliver|ship|sell|shop|app|refund|policy|offer|terms|privacy|magazine|member|subscri|pack|pdf|certificate)\b/i;
 // Models sometimes wrap prose in JSON ({"response":...}, {"reply":...} or [{role,content}]); unwrap to plain text.
-function unwrapReply(s) { let t = String(s || '').trim(); for (let i = 0; i < 3; i++) { if (!/^[\[{]/.test(t)) break; try { const j = JSON.parse(t); const v = Array.isArray(j) ? (j.filter(x => x && x.content).pop() || {}).content : (j.reply ?? j.response ?? j.text ?? j.content ?? j.answer); if (typeof v !== 'string') break; t = v.trim(); } catch { const m = t.match(/"(?:reply|response|text|content|answer)"\s*:\s*"((?:[^"\\]|\\.)*)/); if (m) { try { t = JSON.parse('"' + m[1] + '"'); } catch { t = m[1]; } } break; } } return t; }
+function unwrapReply(s) {
+  const KEYS = ['reply', 'response', 'message', 'answer', 'text', 'content', 'description'];
+  const pick = j => { if (typeof j === 'string') return j; if (Array.isArray(j)) { for (let i = j.length - 1; i >= 0; i--) { const v = pick(j[i]); if (v) return v; } return null; }
+    if (j && typeof j === 'object') { for (const k of KEYS) if (typeof j[k] === 'string' && j[k].trim()) return j[k]; for (const k of KEYS) if (j[k] && typeof j[k] === 'object') { const v = pick(j[k]); if (v) return v; }
+      const strs = Object.entries(j).filter(([, v]) => typeof v === 'string' && v.trim()); if (strs.length) return strs.map(([k, v]) => strs.length > 1 && v.length < 60 ? `${k.replace(/_/g, ' ')}: ${v}` : v).join('. ').replace(/\.\./g, '.'); } return null; };
+  let t = String(s || '').trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+  for (let i = 0; i < 3 && /^[\[{]/.test(t); i++) { try { const v = pick(JSON.parse(t)); if (!v) break; t = v.trim(); } catch { const m = t.match(/"(?:reply|response|message|answer|text|content)"\s*:\s*"((?:[^"\\]|\\.)*)/); if (m) { try { t = JSON.parse('"' + m[1] + '"'); } catch { t = m[1]; } } break; } }
+  return t;
+}
 const DONT_KNOW = 'Honestly, I don’t know that one — I’d rather not guess. Shall I pass the question to Oliver?';
 async function respond(req, { llm, mem, u, refs = [] } = {}) {
   const base = offline(req.message, { mem, u });
