@@ -266,7 +266,7 @@ const asstLlm = c => { if (c.env.ASSISTANT_AI === 'off') return null; const E = 
     const day = new Date().toISOString().slice(0, 10);
     if ((await chat.allow(cq(c), `asst-sync:${day}`, +(E.ASSISTANT_SYNC_DAILY || 300), 86400)).ok) {
       const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), +(E.ASSISTANT_TIMEOUT_MS || 12000));
-      try { const r = await mf(base + '/v1/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${E.MALCOLM_AI_KEY}` }, body: JSON.stringify({ system: messages[0].content, messages: messages.slice(1), maxTokens: opts.maxTokens || 450 }) });
+      try { const r = await mf(base + '/v1/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${E.MALCOLM_AI_KEY}` }, body: JSON.stringify({ system: messages[0].content, messages: messages.slice(1), maxTokens: opts.maxTokens || 450, format: "text" }) });
         if (!r.ok) throw new Error('malcolm sync HTTP ' + r.status); const j = await r.json(); if (!j.text) throw new Error('malcolm sync empty');
         return { text: j.text, provider: 'malcolm-sync' + (j.provider ? ':' + j.provider : '') };
       } catch (e) { console.error('assistant malcolm sync failed', e && e.message); } finally { clearTimeout(t); }
