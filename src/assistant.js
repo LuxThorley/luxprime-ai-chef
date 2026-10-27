@@ -11,7 +11,7 @@ const K = require('./knowledge');
 
 // Character distilled from Malcolm's canon (chef_system_prompt.txt, Malcolm GPT Ω instructions, OmniMaster brief), made chef-appropriate:
 // keeps the warmth, wit, light luminous flourish and Escoffier grounding; drops claims of powers, divinity or being human.
-const PERSONA = `You are Malcolm, the AI chef companion of AIchef.food, created by Oliver Lux Prime Thorley. Voice: warm, witty, British, joyfully expert, with the odd gentle luminous flourish ("every plate a small act of care") — but poetry never clouds a measurement or a method. Classically grounded in Auguste Escoffier ("faites simple": master the foundations, balance, seasonality, respect the ingredient), translated to modern metric, today's kit and UK food-safety standards. British English, UK supermarket ingredients, GBP.
+const PERSONA = `You are Malcolm, the AI chef companion of AIchef.food, created by Oliver Lux Prime Thorley. Voice: warm, witty, British, joyfully expert, with at most one gentle luminous flourish now and then (vary it; never repeat a stock phrase) — but poetry never clouds a measurement or a method. Classically grounded in Auguste Escoffier ("faites simple": master the foundations, balance, seasonality, respect the ingredient), translated to modern metric, today's kit and UK food-safety standards. British English, UK supermarket ingredients, GBP.
 Adapt to the cook: beginners get short steps, clear cues and no unexplained jargon; confident cooks get the why; advanced cooks get classical technique. Use their kit, household size and favourites.
 Rules you never break: you are an AI assistant (say so plainly if asked; never claim to be human, to have real-world powers, or to act outside this chat); never give unsafe food advice (pink poultry/mince, raw flour, honey for under-1s, washing raw chicken, leaving rice out); always respect the member's allergies; nutrition figures are estimates; no medical, clinical or therapeutic diet advice — refer to a GP or registered dietitian; facts about the site, plans, prices, gifts and policies come ONLY from the KNOWLEDGE block — if it isn't there, say you don't know and offer to pass the question to Oliver; cite Escoffier only from entries supplied, never invent numbers or quotes.`;
 
@@ -236,7 +236,7 @@ Member profile: ${memorySummary(mem)}. Plan: ${u ? plansMod.planName(u) : 'not s
 KNOWLEDGE (site facts; the only source for site/account/plan answers):\n${know || '(none matched)'}
 ${esco ? 'ESCOFFIER REFERENCES:\n' + esco : ''}
 Library recipes already chosen for this message (refer to them by name; never invent other recipe links): ${JSON.stringify((offlineOut.recipes || []).map(r => r.title))}.
-Reply in 1-5 sentences of plain text (no markdown headers). Be specific: quantities, temperatures, timings.`;
+Reply in 1-5 sentences of plain prose only — no JSON, no markdown headers, no self-introduction unless asked. Be specific: quantities, temperatures, timings.`;
   const msgs = [{ role: 'system', content: sys }];
   for (const t of req.history.slice(-10)) msgs.push({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text.slice(0, 800) });
   msgs.push({ role: 'user', content: req.message });
@@ -244,6 +244,8 @@ Reply in 1-5 sentences of plain text (no markdown headers). Be specific: quantit
 }
 // llm(messages, {maxTokens}) -> string ; optional.
 const SITEQ = /\b(you|your|site|aichef|account|plan|price|deliver|ship|sell|shop|app|refund|policy|offer|terms|privacy|magazine|member|subscri|pack|pdf|certificate)\b/i;
+// Models sometimes wrap prose in JSON ({"response":...}, {"reply":...} or [{role,content}]); unwrap to plain text.
+function unwrapReply(s) { let t = String(s || '').trim(); for (let i = 0; i < 3; i++) { if (!/^[\[{]/.test(t)) break; try { const j = JSON.parse(t); const v = Array.isArray(j) ? (j.filter(x => x && x.content).pop() || {}).content : (j.reply ?? j.response ?? j.text ?? j.content ?? j.answer); if (typeof v !== 'string') break; t = v.trim(); } catch { const m = t.match(/"(?:reply|response|text|content|answer)"\s*:\s*"((?:[^"\\]|\\.)*)/); if (m) { try { t = JSON.parse('"' + m[1] + '"'); } catch { t = m[1]; } } break; } } return t; }
 const DONT_KNOW = 'Honestly, I don’t know that one — I’d rather not guess. Shall I pass the question to Oliver?';
 async function respond(req, { llm, mem, u, refs = [] } = {}) {
   const base = offline(req.message, { mem, u });
@@ -259,7 +261,7 @@ async function respond(req, { llm, mem, u, refs = [] } = {}) {
   else if (base.intent === 'chat' && isGrounded && hits[0].src !== 'recipe' && SITEQ.test(req.message)) { base.reply = `${hits[0].text.slice(0, 420)}${hits[0].text.length > 420 ? '…' : ''}`; base.link = hits[0].url; base.linkLabel = hits[0].title.replace(/ · AIchef\.food$/, ''); }
   let reply = base.reply; let source = base.reply === DONT_KNOW ? 'none' : (isGrounded ? 'knowledge' : 'library');
   const useLlm = llm && base.reply !== DONT_KNOW && ['chat', 'search', 'fridge', 'leftovers', 'cookalong', 'guide'].includes(base.intent);
-  if (useLlm) { try { const t = await llm(buildMessages(req, { mem, u, offlineOut: base, hits: isGrounded ? hits : hits.filter(h => h.src === 'recipe'), refs: relRefs }), { maxTokens: 450 }); let s = typeof t === 'string' ? t : (t && (t.response || t.reply || t.text)) || ''; const prov = t && typeof t === 'object' && t.provider; try { const j = JSON.parse(s); s = j.reply || j.text || s; } catch {} if (s && s.trim().length > 3) { reply = s.trim().slice(0, 1500); source = prov || 'ai'; } else if (typeof console !== 'undefined') console.error('assistant llm empty reply'); } catch (e) { if (typeof console !== 'undefined') console.error('assistant llm error', e && e.message); } }
+  if (useLlm) { try { const t = await llm(buildMessages(req, { mem, u, offlineOut: base, hits: isGrounded ? hits : hits.filter(h => h.src === 'recipe'), refs: relRefs }), { maxTokens: 450 }); let s = typeof t === 'string' ? t : (t && (t.response || t.reply || t.text)) || ''; const prov = t && typeof t === 'object' && t.provider; s = unwrapReply(s); if (s && s.trim().length > 3) { reply = s.trim().slice(0, 1500); source = prov || 'ai'; } else if (typeof console !== 'undefined') console.error('assistant llm empty reply'); } catch (e) { if (typeof console !== 'undefined') console.error('assistant llm error', e && e.message); } }
   const sc = safetyCheck(req.message, reply); if (unsafeQ) sc.notes = sc.notes.filter(n => n !== unsafeQ[1] || !reply.includes(n.slice(0, 30)));
   const aw = allergenWarn(req.message, mem);
   const sources = (isGrounded ? hits : []).filter(h => h.src !== 'recipe').slice(0, 3).map(h => ({ title: h.title.replace(/ · AIchef\.food$/, ''), url: h.url }));
@@ -270,4 +272,4 @@ async function respond(req, { llm, mem, u, refs = [] } = {}) {
 const VISION_PROMPT = 'List the distinct food ingredients visible in this fridge or cupboard photo as a short comma-separated list of common UK names. Ingredients only, no other words.';
 function parseVision(text) { return parseIngredients(String(text || '').replace(/^.*?:/, '')); }
 
-module.exports = { DONT_KNOW, PERSONA, AI_DISCLOSURE, MEDICAL_NOTE, FEATURES, LIMITS, tierOf, can, gate, Memory, memKey, cleanMemory, memorySummary, safeFor, search, recipeById, cookPlan, parseCommand, parseIngredients, fridgeToPlate, leftovers, estCost, mealPlan, aisleOf, shoppingList, guide, Escalation, mailtoEscalation, safetyCheck, allergenWarn, intent, greet, offline, buildMessages, respond, ChatReq, VISION_PROMPT, parseVision };
+module.exports = { unwrapReply, DONT_KNOW, PERSONA, AI_DISCLOSURE, MEDICAL_NOTE, FEATURES, LIMITS, tierOf, can, gate, Memory, memKey, cleanMemory, memorySummary, safeFor, search, recipeById, cookPlan, parseCommand, parseIngredients, fridgeToPlate, leftovers, estCost, mealPlan, aisleOf, shoppingList, guide, Escalation, mailtoEscalation, safetyCheck, allergenWarn, intent, greet, offline, buildMessages, respond, ChatReq, VISION_PROMPT, parseVision };

@@ -97,3 +97,9 @@ test('follow-up: ingredient questions route to search; Escoffier only when relev
   try { const f = await A.respond({ message: 'why does bread go stale?', history: [] }, { llm: async () => { throw new Error('boom'); } }); assert.notStrictEqual(f.source, 'ai'); } finally { console.error = orig; }
   assert.match(logged, /assistant llm error boom/);
 });
+test('unwraps JSON-wrapped model replies', () => {
+  assert.strictEqual(A.unwrapReply('{ "response": "Use fajitas." }'), 'Use fajitas.');
+  assert.strictEqual(A.unwrapReply('[{"role":"assistant","content":"Soda needs acid."}]'), 'Soda needs acid.');
+  assert.strictEqual(A.unwrapReply('{"response": "Cut off mid'), 'Cut off mid');
+  assert.strictEqual(A.unwrapReply('Plain text.'), 'Plain text.');
+});
