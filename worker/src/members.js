@@ -10,8 +10,9 @@ export async function effectiveUser(DB, u0, KV) {
   if (!u0) return u0; const u = plansMod.withTrial(KV ? await giftMod.grantFor(KV, u0).catch(() => u0) : u0);
   const m = await DB.prepare("SELECT o.* , m.id AS member_id FROM plan_members m JOIN users o ON o.id=m.owner_id WHERE m.user_id=? AND m.status='active'").bind(u.id).first();
   if (!m || !canOwnSeats(m)) return u;
-  const own = isPremium(u) && !u._trial && ['gastronomique', 'family', 'head', 'restaurant'].includes(u.plan);
-  return own ? { ...u, _associateOf: m.id, _ownerName: m.name || m.email } : { ...u, plan: 'gastronomique', sub_status: 'active', _associateOf: m.id, _ownerName: m.name || m.email, _ownPlan: u.plan };
+  const grant = plansMod.associatePlan(m);
+  const own = isPremium(u) && !u._trial && (grant === 'restaurant' ? u.plan === 'restaurant' : ['gastronomique', 'family', 'head', 'restaurant'].includes(u.plan));
+  return own ? { ...u, _associateOf: m.id, _ownerName: m.name || m.email } : { ...u, plan: grant, sub_status: 'active', _associateOf: m.id, _ownerName: m.name || m.email, _ownPlan: u.plan };
 }
 export async function listMembers(DB, owner) {
   const { results } = await DB.prepare('SELECT m.id, m.email, m.status, m.created_at, m.joined_at, u.name FROM plan_members m LEFT JOIN users u ON u.id=m.user_id WHERE m.owner_id=? ORDER BY m.id').bind(owner.id).all();

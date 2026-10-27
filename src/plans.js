@@ -44,4 +44,6 @@ const trialActive = u => !!u && !!u.trial_ends_at && +u.trial_ends_at > Date.now
 const withTrial = u => (!u || isPremium(u) || !trialActive(u)) ? u : { ...u, plan: 'head', sub_status: 'trialing', _trial: true };
 // Restauranteur tools: own active Restauranteur subscription only (never household associates, never the Head Chef trial).
 const isRestaurateur = u => !!u && (isAdmin(u) || isTester(u) || (u.plan === 'restaurant' && !u._trial && ['active', 'trialing'].includes(u.sub_status)));
-module.exports = { isRestaurateur, TRIAL_DAYS, PRICES, savePct, magazine, isMagazinePrice, trialActive, withTrial, seatCap, canOwnSeats, plans, isPremium, isAdmin, isTester, magazineIncluded, magazinePrice, planFromPrice, planName };
+// Household associates inherit Gastronomique; associates of an admin account get Restauranteur (all restaurant tools, Menu Builder, Kitchen Pack).
+const associatePlan = owner => isAdmin(owner) ? 'restaurant' : 'gastronomique';
+module.exports = { associatePlan, isRestaurateur, TRIAL_DAYS, PRICES, savePct, magazine, isMagazinePrice, trialActive, withTrial, seatCap, canOwnSeats, plans, isPremium, isAdmin, isTester, magazineIncluded, magazinePrice, planFromPrice, planName };
