@@ -256,9 +256,24 @@ async function aiBudget(c, kind) { // daily cap keeps usage inside the Workers A
 async function asstMemory(c) { const u = c.get('user'); if (!u) return null; const v = await c.env.IMAGES.get(assistant.memKey(u.id)); return v ? JSON.parse(v) : null; }
 // Persona/character sync: ASSISTANT_SYNC=malcolm routes chat through the Malcolm AI worker's /v1/chat (service binding,
 // MALCOLM_AI_KEY secret, server-side only, 12 s timeout) and falls back to the free Workers AI model, then to the offline library.
-const asstLlm = c => { if (c.env.ASSISTANT_AI === 'off') return null; const model = c.env.ASSISTANT_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast';
-  if (c.env.ASSISTANT_SYNC === 'malcolm' && c.env.MALCOLM_AI_KEY && c.env.MALCOLM_AI_URL) return chat.malcolmLlm({ ...c.env, CHAT_MODEL: model, CHAT_TIMEOUT_MS: c.env.ASSISTANT_TIMEOUT_MS || '12000' }, malcolmFetch(c.env));
-  return c.env.AI ? chat.workersAiLlm({ ...c.env, CHAT_MODEL: model }) : null; };
+const asstLlm = c => { if (c.env.ASSISTANT_AI === 'off') return null; const E = c.env; const model = E.ASSISTANT_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast';
+  // Free Cloudflare model, plain text (no JSON response_format for prose chat).
+  const wai = E.AI ? async (messages, { maxTokens = 450 } = {}) => { const out = await E.AI.run(model, { messages, max_tokens: maxTokens, temperature: 0.6 }); const t = out && (out.response ?? out); return { text: typeof t === 'string' ? t : JSON.stringify(t), provider: 'workers-ai' }; } : null;
+  const base = String(E.MALCOLM_AI_URL || '').replace(/\/+$/, '').replace(/\/(omni\/command|v1\/recipes)$/, '');
+  if (E.ASSISTANT_SYNC !== 'malcolm' || !E.MALCOLM_AI_KEY || !base) return wai;
+  const mf = malcolmFetch(E);
+  return async (messages, opts = {}) => {
+    const day = new Date().toISOString().slice(0, 10);
+    if ((await chat.allow(cq(c), `asst-sync:${day}`, +(E.ASSISTANT_SYNC_DAILY || 300), 86400)).ok) {
+      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), +(E.ASSISTANT_TIMEOUT_MS || 12000));
+      try { const r = await mf(base + '/v1/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${E.MALCOLM_AI_KEY}` }, body: JSON.stringify({ system: messages[0].content, messages: messages.slice(1), maxTokens: opts.maxTokens || 450 }) });
+        if (!r.ok) throw new Error('malcolm sync HTTP ' + r.status); const j = await r.json(); if (!j.text) throw new Error('malcolm sync empty');
+        return { text: j.text, provider: 'malcolm-sync' + (j.provider ? ':' + j.provider : '') };
+      } catch (e) { console.error('assistant malcolm sync failed', e && e.message); } finally { clearTimeout(t); }
+    } else console.warn('assistant malcolm sync daily cap reached');
+    if (!wai) throw new Error('no fallback model'); return wai(messages, opts);
+  };
+};
 async function asstRefs(c, msg) { try { if (!/\b(sauce|stock|classic|french|technique|escoffier|roast|braise|pastry|souffl|consomm|velout|béchamel|bechamel|hollandaise)/i.test(msg)) return []; return (await escoffier.list(d1all(c), { q: msg.slice(0, 100) })).entries.slice(0, 2); } catch { return []; } }
 app.get('/api/assistant/hello', async c => { const u = c.get('user'); const mem = await asstMemory(c); const tier = assistant.tierOf(u);
   return c.json({ greeting: assistant.greet(u, mem), tier, signedIn: !!u, planName: u ? plansMod.planName(u) : null, features: Object.fromEntries(Object.keys(assistant.FEATURES).map(f => [f, assistant.can(u, f)])), memory: mem, disclosure: assistant.AI_DISCLOSURE, ai: !!asstLlm(c) }); });

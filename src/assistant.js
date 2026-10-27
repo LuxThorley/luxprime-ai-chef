@@ -104,7 +104,7 @@ function parseCommand(t) {
 }
 
 // ---------- Phase 3: fridge-to-plate, leftovers, meal plans, shopping lists, budget
-const STOP = /\b(i have|i've got|ive got|some|a bit of|leftover|left over|half a|half|bag of|tin of|pack of|and|in the fridge|fridge|what can i make with|use up|plus|with)\b/g;
+const STOP = /\b(i have|i've got|ive got|some|a bit of|leftover|left over|half a|half|bag of|tin of|pack of|and|in the fridge|fridge|what can i make with|what can i cook|what can i make|what could i cook|tonight|today|for dinner|for tea|use up|plus|with)\b/g;
 function parseIngredients(text) {
   return [...new Set(String(text || '').toLowerCase().replace(STOP, ',').split(/[,;\n\/&+]|\s{2,}/).map(s => s.replace(/[^a-z \-]/g, '').replace(/\b\d+\b/g, '').trim()).filter(s => s.length > 1 && s.length < 30))].slice(0, 20);
 }
@@ -210,7 +210,7 @@ function intent(m) {
   if (/\b(meal plan|plan (my|the|a) week|weekly plan|week of (meals|dinners)|plan dinners)\b/.test(s)) return 'mealplan';
   if (/\b(shopping list|grocery list|what do i need to buy)\b/.test(s)) return 'shopping';
   if (/\bleftover|left over|use up\b/.test(s) && !/\bi have\b/.test(s)) return 'leftovers';
-  if (/\b(i have|i've got|ive got|in my fridge|what can i (make|cook) with|fridge)\b/.test(s)) return 'fridge';
+  if (/\b(i have|i've got|ive got|in my fridge|fridge)\b/.test(s) || /\bwhat (can|could|should) i (make|cook)\b.*\bwith\b/.test(s) || /\b(use|using) (up )?(my|some|the)? ?[a-z]+ (and|,) [a-z]+/.test(s)) return 'fridge';
   if (guide(s) && !/\b(recipe|cook|make|dinner|lunch)\b/.test(s)) return 'guide';
   if (/\b(recipe|dinner|lunch|breakfast|tea tonight|supper|something to (cook|make)|ideas? for|fancy|craving|quick)\b/.test(s)) return 'search';
   return 'chat';
@@ -250,14 +250,16 @@ async function respond(req, { llm, mem, u, refs = [] } = {}) {
   const hits = K.retrieve(req.message, { k: 4, src: s => base.intent === 'guide' || base.intent === 'chat' ? true : s !== 'recipe' });
   const isGrounded = K.grounded(hits);
   // Site/general question with nothing in the knowledge index or library → say so (no fabricated facts).
+  const relRefs = refs.filter(r => { const tw = String(r.title || '').toLowerCase(); return (req.message.toLowerCase().match(/[a-zé]{4,}/g) || []).some(w => !/^(what|when|does|have|with|make|cook|should|would|could|there|about|why|how)$/.test(w) && tw.includes(w.replace(/s$/, ''))); });
+  if (base.intent === 'chat') base.refsUsed = relRefs.length;
   const unsafeQ = UNSAFE_Q.find(([re]) => re.test(req.message));
   if (unsafeQ) { base.reply = unsafeQ[1]; base.recipes = (base.recipes || []).slice(0, 2); }
   else if (base.intent === 'chat' && !isGrounded && SITEQ.test(req.message)) { base.reply = DONT_KNOW; base.escalate = true; base.recipes = []; }
-  else if (base.intent === 'chat' && refs.length) { base.reply = `Escoffier has you covered — Guide No. ${refs[0].no}, ${refs[0].title}: ${String(refs[0].snippet || '').slice(0, 300)}`; base.link = `/escoffier.html?no=${encodeURIComponent(refs[0].no)}`; base.linkLabel = 'Read in the Escoffier library'; }
+  else if (base.intent === 'chat' && relRefs.length) { const refs0 = relRefs; base.reply = `Escoffier has you covered — Guide No. ${refs0[0].no}, ${refs0[0].title}: ${String(refs0[0].snippet || '').slice(0, 300)}`; base.link = `/escoffier.html?no=${encodeURIComponent(refs0[0].no)}`; base.linkLabel = 'Read in the Escoffier library'; }
   else if (base.intent === 'chat' && isGrounded && hits[0].src !== 'recipe' && SITEQ.test(req.message)) { base.reply = `${hits[0].text.slice(0, 420)}${hits[0].text.length > 420 ? '…' : ''}`; base.link = hits[0].url; base.linkLabel = hits[0].title.replace(/ · AIchef\.food$/, ''); }
   let reply = base.reply; let source = base.reply === DONT_KNOW ? 'none' : (isGrounded ? 'knowledge' : 'library');
   const useLlm = llm && base.reply !== DONT_KNOW && ['chat', 'search', 'fridge', 'leftovers', 'cookalong', 'guide'].includes(base.intent);
-  if (useLlm) { try { const t = await llm(buildMessages(req, { mem, u, offlineOut: base, hits: isGrounded ? hits : hits.filter(h => h.src === 'recipe'), refs }), { maxTokens: 450 }); let s = typeof t === 'string' ? t : (t && (t.response || t.reply || t.text)) || ''; try { const j = JSON.parse(s); s = j.reply || j.text || s; } catch {} if (s && s.trim().length > 3) { reply = s.trim().slice(0, 1500); source = 'ai'; } } catch (e) { /* fall back to knowledge/library */ } }
+  if (useLlm) { try { const t = await llm(buildMessages(req, { mem, u, offlineOut: base, hits: isGrounded ? hits : hits.filter(h => h.src === 'recipe'), refs: relRefs }), { maxTokens: 450 }); let s = typeof t === 'string' ? t : (t && (t.response || t.reply || t.text)) || ''; const prov = t && typeof t === 'object' && t.provider; try { const j = JSON.parse(s); s = j.reply || j.text || s; } catch {} if (s && s.trim().length > 3) { reply = s.trim().slice(0, 1500); source = prov || 'ai'; } else if (typeof console !== 'undefined') console.error('assistant llm empty reply'); } catch (e) { if (typeof console !== 'undefined') console.error('assistant llm error', e && e.message); } }
   const sc = safetyCheck(req.message, reply); if (unsafeQ) sc.notes = sc.notes.filter(n => n !== unsafeQ[1] || !reply.includes(n.slice(0, 30)));
   const aw = allergenWarn(req.message, mem);
   const sources = (isGrounded ? hits : []).filter(h => h.src !== 'recipe').slice(0, 3).map(h => ({ title: h.title.replace(/ · AIchef\.food$/, ''), url: h.url }));

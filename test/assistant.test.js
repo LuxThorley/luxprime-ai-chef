@@ -87,3 +87,13 @@ test('LLM receives knowledge, profile and adaptive skill guidance', async () => 
   let seen; await A.respond({ message: 'how much is head chef?', history: [] }, { llm: async m => { seen = m[0].content; return 'Head Chef is £7.99 a month.'; }, mem: mem({ skill: 'beginner' }) });
   assert.match(seen, /KNOWLEDGE/); assert.match(seen, /Head Chef/); assert.match(seen, /Skill: beginner/);
 });
+test('follow-up: ingredient questions route to search; Escoffier only when relevant; provider surfaced; errors logged', async () => {
+  assert.strictEqual(A.intent('What can I cook tonight with chicken and peppers?'), 'fridge');
+  const r = await A.respond({ message: 'What can I cook tonight with chicken and peppers?', history: [] }, {}); assert.strictEqual(r.recipes[0].title, 'Chicken Fajitas');
+  const s = await A.respond({ message: 'Why does my sauce split?', history: [] }, { refs: [{ no: 2624, title: 'Blanc-Mange', snippet: 'x' }] }); assert.doesNotMatch(s.reply, /Blanc-Mange/);
+  const h = await A.respond({ message: 'Why does my hollandaise split?', history: [] }, { refs: [{ no: 100, title: 'Hollandaise Sauce', snippet: 'y' }] }); assert.match(h.reply, /Hollandaise/);
+  const p = await A.respond({ message: 'why does bread go stale?', history: [] }, { llm: async () => ({ text: 'Starch retrogradation, mostly.', provider: 'malcolm-sync:gemini' }) }); assert.strictEqual(p.source, 'malcolm-sync:gemini');
+  const orig = console.error; let logged = ''; console.error = (...a) => { logged += a.join(' '); };
+  try { const f = await A.respond({ message: 'why does bread go stale?', history: [] }, { llm: async () => { throw new Error('boom'); } }); assert.notStrictEqual(f.source, 'ai'); } finally { console.error = orig; }
+  assert.match(logged, /assistant llm error boom/);
+});
