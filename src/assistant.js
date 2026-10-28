@@ -203,7 +203,7 @@ function allergenWarn(text, mem) {
 }
 
 // ---------- Intent routing + offline replies
-const ChatReq = z.object({ message: z.string().trim().min(1, 'Type a message for Malcolm').max(600), history: z.array(z.object({ role: z.enum(['user', 'malcolm']), text: z.string().max(1500) })).max(30).default([]), page: z.string().max(200).optional(), localMemory: z.any().optional() });
+const ChatReq = z.object({ message: z.string().trim().min(1, 'Type a message for Malcolm').max(600), history: z.array(z.object({ role: z.enum(['user', 'malcolm']), text: z.string().max(4000) })).max(30).default([]), lastRecipeIds: z.array(z.string().max(120)).max(6).default([]), confirm: z.enum(['clear_shopping']).optional(), page: z.string().max(200).optional(), localMemory: z.any().optional() });
 function intent(m) {
   const s = m.toLowerCase();
   if (/\b(cook ?-?along|cook with me|walk me through|guide me through|step by step)\b/.test(s)) return 'cookalong';
@@ -228,15 +228,15 @@ function offline(m, { mem, u } = {}) {
   const recipes = search({ text: m, mem, limit: 3 });
   return { reply: it === 'search' ? 'Here’s what I’d cook — all checked against your allergies and diet:' : 'Good question! My full kitchen brain is resting just now, so here are some recipes that might help — or ask me about plans, gifts or your account.', intent: it, recipes };
 }
-function buildMessages(req, { mem, u, offlineOut, hits = [], refs = [] }) {
-  const know = hits.map((h, i) => `[K${i + 1}] ${h.title} (${h.url}): ${h.text.slice(0, 600)}`).join('\n');
+function buildMessages(req, { mem, u, offlineOut, hits = [], refs = [], tool = null, long = false }) {
+  const know = hits.map((h, i) => `[K${i + 1}] ${h.title} (${h.url}): ${h.text.slice(0, 350)}`).join('\n');
   const esco = refs.map(r => `Escoffier Guide No. ${r.no}: ${r.title} — ${r.snippet}`).join('\n');
   const sys = `${PERSONA}
 Member profile: ${memorySummary(mem)}. Plan: ${u ? plansMod.planName(u) : 'not signed in'}. Page: ${req.page || '/'}.
 KNOWLEDGE (site facts; the only source for site/account/plan answers):\n${know || '(none matched)'}
 ${esco ? 'ESCOFFIER REFERENCES:\n' + esco : ''}
 Library recipes already chosen for this message (refer to them by name; never invent other recipe links): ${JSON.stringify((offlineOut.recipes || []).map(r => r.title))}.
-Reply in 1-5 sentences of plain prose only — no JSON, no markdown headers, no self-introduction unless asked. Be specific: quantities, temperatures, timings.`;
+${tool ? `ACTION ALREADY TAKEN by the site for this member (report it truthfully in your own voice; never claim any other action, never invent items): ${String(tool.summary || tool.reply).slice(0, 900)}\n` : ''}Reply in ${long ? 'up to three short paragraphs' : '1-5 sentences'} of plain prose only — no JSON, no markdown headers, no self-introduction unless asked. Be specific: quantities, temperatures, timings.`;
   const msgs = [{ role: 'system', content: sys }];
   for (const t of req.history.slice(-10)) msgs.push({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text.slice(0, 800) });
   msgs.push({ role: 'user', content: req.message });
@@ -256,9 +256,11 @@ function unwrapReply(s) {
   t = t.replace(/^\s*(?:recipe|dish|answer|reply|response|malcolm|chef|title)\s*:\s*(?:[^.!?\n]{1,80}[.!?]\s+(?=[A-Z]))?/i, '');
   return t.trim();
 }
+const LEAK = /\b(system (prompt|instructions?|message)|parseable JSON|valid JSON|as an AI language model)\b/i;
 const DONT_KNOW = 'Honestly, I don’t know that one — I’d rather not guess. Shall I pass the question to Oliver?';
-async function respond(req, { llm, mem, u, refs = [] } = {}) {
+async function respond(req, { llm, mem, u, refs = [], tool = null, maxTokens = 450 } = {}) {
   const base = offline(req.message, { mem, u });
+  if (tool) { base.intent = 'tool:' + tool.name; base.reply = tool.reply; base.recipes = tool.name === 'new_recipe' ? [] : (base.recipes || []).slice(0, tool.ok ? 0 : 2); }
   const hits = K.retrieve(req.message, { k: 4, src: s => base.intent === 'guide' || base.intent === 'chat' ? true : s !== 'recipe' });
   const isGrounded = K.grounded(hits);
   // Site/general question with nothing in the knowledge index or library → say so (no fabricated facts).
@@ -270,12 +272,12 @@ async function respond(req, { llm, mem, u, refs = [] } = {}) {
   else if (base.intent === 'chat' && relRefs.length) { const refs0 = relRefs; base.reply = `Escoffier has you covered — Guide No. ${refs0[0].no}, ${refs0[0].title}: ${String(refs0[0].snippet || '').slice(0, 300)}`; base.link = `/escoffier.html?no=${encodeURIComponent(refs0[0].no)}`; base.linkLabel = 'Read in the Escoffier library'; }
   else if (base.intent === 'chat' && isGrounded && hits[0].src !== 'recipe' && SITEQ.test(req.message)) { base.reply = `${hits[0].text.slice(0, 420)}${hits[0].text.length > 420 ? '…' : ''}`; base.link = hits[0].url; base.linkLabel = hits[0].title.replace(/ · AIchef\.food$/, ''); }
   let reply = base.reply; let source = base.reply === DONT_KNOW ? 'none' : (isGrounded ? 'knowledge' : 'library');
-  const useLlm = llm && base.reply !== DONT_KNOW && ['chat', 'search', 'fridge', 'leftovers', 'cookalong', 'guide'].includes(base.intent);
-  if (useLlm) { try { const t = await llm(buildMessages(req, { mem, u, offlineOut: base, hits: isGrounded ? hits : hits.filter(h => h.src === 'recipe'), refs: relRefs }), { maxTokens: 450 }); let s = typeof t === 'string' ? t : (t && (t.response || t.reply || t.text)) || ''; const prov = t && typeof t === 'object' && t.provider; s = unwrapReply(s); if (s && s.trim().length > 3) { reply = s.trim().slice(0, 1500); source = prov || 'ai'; } else if (typeof console !== 'undefined') console.error('assistant llm empty reply'); } catch (e) { if (typeof console !== 'undefined') console.error('assistant llm error', e && e.message); } }
+  const useLlm = llm && base.reply !== DONT_KNOW && (['chat', 'search', 'fridge', 'leftovers', 'cookalong', 'guide'].includes(base.intent) || (tool && tool.ok && !tool.needsConfirm && !['check_allergens', 'clear_shopping', 'remove_shopping', 'new_recipe'].includes(tool.name)));
+  if (useLlm) { try { const t = await llm(buildMessages(req, { mem, u, offlineOut: base, hits: isGrounded ? hits : hits.filter(h => h.src === 'recipe'), refs: relRefs, tool, long: maxTokens > 600 }), { maxTokens }); let s = typeof t === 'string' ? t : (t && (t.response || t.reply || t.text)) || ''; const prov = t && typeof t === 'object' && t.provider; s = unwrapReply(s); if (LEAK.test(s) || /^\s*[{\[]/.test(s)) { if (typeof console !== 'undefined') console.error('assistant llm leaked format/meta text; using library reply'); s = ''; } if (s && s.trim().length > 3) { reply = s.trim().slice(0, maxTokens > 600 ? 4000 : 1500); source = prov || 'ai'; } else if (typeof console !== 'undefined') console.error('assistant llm empty reply'); } catch (e) { if (typeof console !== 'undefined') console.error('assistant llm error', e && e.message); } }
   const sc = safetyCheck(req.message, reply); if (unsafeQ) sc.notes = sc.notes.filter(n => n !== unsafeQ[1] || !reply.includes(n.slice(0, 30)));
   const aw = allergenWarn(req.message, mem);
   const sources = (isGrounded ? hits : []).filter(h => h.src !== 'recipe').slice(0, 3).map(h => ({ title: h.title.replace(/ · AIchef\.food$/, ''), url: h.url }));
-  return { ...base, reply: sc.reply, notes: [aw, ...sc.notes].filter(Boolean), source, sources, disclosure: AI_DISCLOSURE };
+  return { ...base, ...(tool ? { tool: { name: tool.name, ok: !!tool.ok, needsConfirm: tool.needsConfirm || null, data: tool.data || null }, link: tool.link || base.link, linkLabel: tool.linkLabel || base.linkLabel, upgrade: tool.upgrade || base.upgrade } : {}), reply: sc.reply, notes: [aw, ...sc.notes].filter(Boolean), source, sources, disclosure: AI_DISCLOSURE };
 }
 
 // Vision prompt for a fridge photo (Workers AI free allocation); output parsed into ingredient names.
