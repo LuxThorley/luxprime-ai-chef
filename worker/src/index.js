@@ -59,10 +59,11 @@ app.use('*', async (c, next) => {
   for (const [k, v] of Object.entries(c.env)) if (typeof v === 'string') process.env[k] = v;
   await next();
   const h = c.res.headers;
-  h.set('X-Content-Type-Options', 'nosniff'); h.set('Referrer-Policy', 'strict-origin-when-cross-origin'); h.set('X-Frame-Options', 'SAMEORIGIN');
+  h.set('X-Content-Type-Options', 'nosniff'); h.set('Referrer-Policy', 'strict-origin-when-cross-origin'); h.set('X-Frame-Options', 'SAMEORIGIN'); h.set('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(), payment=(), usb=(), interest-cohort=()'); h.set('Cross-Origin-Opener-Policy', 'same-origin');
   h.set('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  if (c.req.path.startsWith('/api/') && !h.has('Cache-Control')) h.set('Cache-Control', 'no-store');
   if ((h.get('content-type') || '').includes('text/html') || c.req.path.startsWith('/api/'))
-    h.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; form-action 'self' https://checkout.stripe.com; frame-ancestors 'self'; base-uri 'self'");
+    h.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; form-action 'self' https://checkout.stripe.com; frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
 });
 
 // Simple D1-backed fixed-window rate limiter.

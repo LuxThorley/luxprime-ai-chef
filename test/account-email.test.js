@@ -71,3 +71,13 @@ test('magazine delivery: verified before use, routing, revert, isolation', async
   await a.ag.delete('/api/magazine/delivery').set('x-csrf-token', a.t); assert.equal(AE.deliveryAddress(u(a.id), row(a.id)), 'ma@x.co');
   assert.equal((await a.ag.post('/api/magazine/delivery').set('x-csrf-token', a.t).send({ email: 'ma@x.co' })).body.usingAccountEmail, true);
 });
+
+test('password change revokes other sessions (session epoch)', async () => {
+  const R = rig(); const a = await member(R, 'pw2@x.co');
+  const b = request.agent(R.mk()); const bt = (await b.get('/api/csrf')).body.csrfToken;
+  await b.post('/api/auth/login').set('x-csrf-token', bt).send({ email: 'pw2@x.co', password: 'supersecret1' });
+  assert.ok((await b.get('/api/me')).body.user);
+  assert.equal((await a.ag.post('/api/auth/password').set('x-csrf-token', a.t).send({ currentPassword: 'supersecret1', newPassword: 'newsecret33' })).status, 200);
+  assert.equal((await b.get('/api/me')).body.user, null);
+  assert.ok((await a.ag.get('/api/me')).body.user);
+});

@@ -122,7 +122,8 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
     const p = PwSchema.safeParse(req.body); if (!p.success) return bad(res, p.error);
     if (!(await bcrypt.compare(p.data.currentPassword, req.user.password_hash))) return res.status(401).json({ error: 'Current password is incorrect' });
     if (p.data.newPassword === p.data.currentPassword) return res.status(400).json({ error: 'Choose a different new password' });
-    db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(await bcrypt.hash(p.data.newPassword, 12), req.user.id); res.json({ ok: true });
+    db.prepare('UPDATE users SET password_hash=?, session_epoch=session_epoch+1 WHERE id=?').run(await bcrypt.hash(p.data.newPassword, 12), req.user.id); // signs out every other device
+    setSession(res, db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)); res.json({ ok: true });
   }));
   app.delete('/api/me', needAuth, (req, res) => { if (isTester(req.user)) return res.status(403).json({ error: 'The shared test account can’t be deleted from the site' }); db.prepare('DELETE FROM users WHERE id=?').run(req.user.id); res.clearCookie('lp_session', { path: '/' }); res.json({ ok: true }); });
 
