@@ -23,6 +23,7 @@ function open(file = process.env.DB_PATH || path.join(__dirname, '..', 'data', '
   const mig = f => fs.readFileSync(path.join(__dirname, '..', 'worker', 'migrations', f), 'utf8');
   db.exec(mig('0004_magazine.sql')); db.exec(mig('0006_members.sql'));
   if (!db.prepare('PRAGMA table_info(email_tokens)').all().some(c => c.name === 'target_email')) db.exec(mig('0011_account_email.sql'));
+  db.exec(mig('0012_totp_2fa.sql'));
   if (!db.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'session_epoch')) db.exec('ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0'); // Node/JWT sessions only; the Worker uses its sessions table
   loadEscoffier(db);
   return db;

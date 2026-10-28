@@ -20,6 +20,7 @@ const CR = CRmod;
 import briefMod from '../../src/brief.js';
 import chat from '../../src/chat.js';
 import memory from '../../src/memory.js';
+import twofa from '../../src/twofa.js';
 import acctEmail from '../../src/account-email.js';
 import assistant from '../../src/assistant.js';
 import dioscorides from '../../src/dioscorides.js';
@@ -59,10 +60,11 @@ app.use('*', async (c, next) => {
   for (const [k, v] of Object.entries(c.env)) if (typeof v === 'string') process.env[k] = v;
   await next();
   const h = c.res.headers;
-  h.set('X-Content-Type-Options', 'nosniff'); h.set('Referrer-Policy', 'strict-origin-when-cross-origin'); h.set('X-Frame-Options', 'SAMEORIGIN');
+  h.set('X-Content-Type-Options', 'nosniff'); h.set('Referrer-Policy', 'strict-origin-when-cross-origin'); h.set('X-Frame-Options', 'SAMEORIGIN'); h.set('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(), payment=(), usb=(), interest-cohort=()'); h.set('Cross-Origin-Opener-Policy', 'same-origin');
   h.set('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  if (c.req.path.startsWith('/api/') && !h.has('Cache-Control')) h.set('Cache-Control', 'no-store'); // personal API data never cached
   if ((h.get('content-type') || '').includes('text/html') || c.req.path.startsWith('/api/'))
-    h.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; form-action 'self' https://checkout.stripe.com; frame-ancestors 'self'; base-uri 'self'");
+    h.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; form-action 'self' https://checkout.stripe.com; frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
 });
 
 // Simple D1-backed fixed-window rate limiter.
@@ -147,6 +149,7 @@ app.use('/api/*', async (c, next) => {
     const u = await db(c).prepare('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?').bind(sid, Date.now()).first();
     if (u) c.set('user', await members.effectiveUser(db(c), u, c.env.IMAGES));
   }
+  const blk = await twofa.enrolmentBlock(cq(c), c.env, c.get('user'), c.req.path).catch(e => (console.error('2fa gate', e && e.message), null)); if (blk) return c.json(blk.json, blk.status); // admin/tester must enrol 2FA
   await next();
 });
 const needAuth = async (c, next) => c.get('user') ? next() : c.json({ error: 'Please sign in' }, 401);
@@ -176,12 +179,27 @@ app.post('/api/auth/verify/resend', rl('verify-resend', 5, 3600), needAuth, asyn
   if (!mailer.ready(c.env)) return c.json({ ok: false, pending: true, reason: 'email-not-configured', error: 'Verification emails aren’t switched on yet — your account works fully meanwhile, and we’ll ask you to confirm once they are.' }, 503);
   try { await verifyMod.sendVerification(cq(c), c.env, u, appUrl(c)); return c.json({ ok: true, sent: true }); } catch (e) { console.error('verify resend', e && e.message); return c.json({ error: 'Couldn’t send the email just now — please try again shortly' }, 502); }
 });
+// ---- Two-factor authentication (src/twofa.js). Secret encryption key: Worker secret TOTP_ENC_KEY. ----
+const tfIo = c => ({ verifyPassword, startSession: u => startSession(c, u),
+  revokeOtherSessions: uid => db(c).prepare('DELETE FROM sessions WHERE user_id=? AND id<>?').bind(uid, getCookie(c, 'lp_session') || '').run(),
+  getTrust: () => getCookie(c, 'lp_trust') || null,
+  setTrust: (t, age) => setCookie(c, 'lp_trust', t, { httpOnly: true, sameSite: 'Lax', secure: new URL(c.req.url).protocol === 'https:', maxAge: age, path: '/api/auth' }),
+  clearTrust: () => deleteCookie(c, 'lp_trust', { path: '/api/auth' }) });
+app.post('/api/auth/2fa', rl('2fa-login', 10, 900), async c => { const r = await twofa.completeLogin(cq(c), c.env, await body(c), tfIo(c)); if (r.json.user) r.json.user = publicUser(await members.effectiveUser(db(c), r.json.user, c.env.IMAGES)); return c.json(r.json, r.status); });
+const TF = (h, withBody) => async c => { const r = await twofa.H[h](cq(c), c.env, c.get('user'), withBody ? await body(c) : undefined, tfIo(c)); return c.json(r.json, r.status); };
+app.get('/api/2fa/status', needAuth, TF('status'));
+app.post('/api/2fa/setup', rl('2fa', 10, 900), needAuth, TF('setup', true));
+app.post('/api/2fa/enable', rl('2fa', 10, 900), needAuth, TF('enable', true));
+app.post('/api/2fa/disable', rl('2fa', 10, 900), needAuth, TF('disable', true));
+app.post('/api/2fa/backup-codes', rl('2fa', 10, 900), needAuth, TF('regenerate', true));
+app.delete('/api/2fa/devices', needAuth, async c => { const r = await twofa.H.forgetDevices(cq(c), c.get('user'), tfIo(c)); return c.json(r.json, r.status); });
 app.post('/api/auth/login', rl('auth', 20, 900), async c => {
   const p = AuthSchema.safeParse(await body(c)); if (!p.success) return c.json({ error: 'Incorrect email or password' }, 401);
   const u = await db(c).prepare('SELECT * FROM users WHERE email=?').bind(p.data.email).first();
   const ok = await verifyPassword(p.data.password, u ? u.password_hash : null);
   if (!u || !ok) return c.json({ error: 'Incorrect email or password' }, 401);
-  await startSession(c, u); return c.json({ user: publicUser(u) });
+  const step = await twofa.afterPassword(cq(c), c.env, u, tfIo(c)); if (!step.done) return c.json(step.json); // 2FA challenge; no session yet
+  await startSession(c, u); return c.json({ user: publicUser(u), ...(twofa.mustHave(u) && twofa.ready(c.env) && !(await twofa.isEnabled(cq(c), u.id)) ? { enrol2fa: true } : {}) });
 });
 app.post('/api/auth/logout', async c => { const sid = getCookie(c, 'lp_session'); if (sid) await db(c).prepare('DELETE FROM sessions WHERE id=?').bind(sid).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/me', c => c.json({ user: publicUser(c.get('user')) || null }));

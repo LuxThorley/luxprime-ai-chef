@@ -4,7 +4,7 @@ const path = require('path'); const crypto = require('crypto');
 const express = require('express'); const helmet = require('helmet'); const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser'); const bcrypt = require('bcryptjs'); const jwt = require('jsonwebtoken');
 const { z } = require('zod');
-const { open } = require('./db'); const verifyMod = require('./verify'); const chatMod = require('./chat'); const acctEmail = require('./account-email'); const memory = require('./memory'); const mailer = require('./mailer'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
+const { open } = require('./db'); const verifyMod = require('./verify'); const chatMod = require('./chat'); const twofa = require('./twofa'); const acctEmail = require('./account-email'); const memory = require('./memory'); const mailer = require('./mailer'); const ai = require('./ai'); const { safetyNotes, DISCLAIMER } = require('./safety');
 const { plans, isPremium, isAdmin, isTester } = require('./plans'); const images = require('./images');
 const escoffier = require('./escoffier'); const fsx = require('fs'); const { UK14, RECIPES } = require('./recipes'); const community = require('./community'); const CR = require('./community-routes'); const briefMod = require('./brief');
 
@@ -108,12 +108,24 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
     if (!mailer.ready(mailEnv)) return res.status(503).json({ ok: false, pending: true, reason: 'email-not-configured', error: 'Verification emails aren’t switched on yet — your account works fully meanwhile, and we’ll ask you to confirm once they are.' });
     try { await verifyMod.sendVerification(cq, mailEnv, req.user, `${req.protocol}://${req.get('host')}`, opts.fetchImpl); res.json({ ok: true, sent: true }); } catch (e) { console.error('verify resend', e && e.message); res.status(502).json({ error: 'Couldn’t send the email just now — please try again shortly' }); }
   }));
+  // ---- Two-factor authentication (src/twofa.js); env TOTP_ENC_KEY comes from mailEnv/process.env ----
+  const tfIo = (req, res) => ({ verifyPassword: (pw, h) => bcrypt.compare(pw, h || ''), startSession: async u => setSession(res, u),
+    revokeOtherSessions: async uid => { db.prepare('UPDATE users SET session_epoch=session_epoch+1 WHERE id=?').run(uid); setSession(res, db.prepare('SELECT * FROM users WHERE id=?').get(uid)); },
+    getTrust: () => req.cookies.lp_trust || null, setTrust: (t, age) => res.cookie('lp_trust', t, { httpOnly: true, sameSite: 'lax', secure: prod, maxAge: age * 1000, path: '/api/auth' }), clearTrust: () => res.clearCookie('lp_trust', { path: '/api/auth' }) });
+  const tfLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false });
+  app.use(a(async (req, res, next) => { const blk = await twofa.enrolmentBlock(cq, mailEnv, req.user, req.path); if (blk) return res.status(blk.status).json(blk.json); next(); }));
+  app.post('/api/auth/2fa', tfLimiter, a(async (req, res) => { const r = await twofa.completeLogin(cq, mailEnv, req.body, tfIo(req, res)); if (r.json.user) r.json.user = publicUser(r.json.user); res.status(r.status).json(r.json); }));
+  const TF = (h, withBody) => a(async (req, res) => { const r = await twofa.H[h](cq, mailEnv, req.user, withBody ? req.body : undefined, tfIo(req, res)); res.status(r.status).json(r.json); });
+  app.get('/api/2fa/status', needAuth, TF('status')); app.post('/api/2fa/setup', tfLimiter, needAuth, TF('setup', true)); app.post('/api/2fa/enable', tfLimiter, needAuth, TF('enable', true));
+  app.post('/api/2fa/disable', tfLimiter, needAuth, TF('disable', true)); app.post('/api/2fa/backup-codes', tfLimiter, needAuth, TF('regenerate', true));
+  app.delete('/api/2fa/devices', needAuth, a(async (req, res) => { const r = await twofa.H.forgetDevices(cq, req.user, tfIo(req, res)); res.status(r.status).json(r.json); }));
   app.post('/api/auth/login', authLimiter, a(async (req, res) => {
     const p = AuthSchema.safeParse(req.body); if (!p.success) return res.status(401).json({ error: 'Incorrect email or password' });
     const u = db.prepare('SELECT * FROM users WHERE email=?').get(p.data.email);
     const ok = await bcrypt.compare(p.data.password, u ? u.password_hash : '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinva');
     if (!u || !ok) return res.status(401).json({ error: 'Incorrect email or password' });
-    setSession(res, u); res.json({ user: publicUser(u) });
+    const step = await twofa.afterPassword(cq, mailEnv, u, tfIo(req, res)); if (!step.done) return res.json(step.json);
+    setSession(res, u); res.json({ user: publicUser(u), ...(twofa.mustHave(u) && twofa.ready(mailEnv) && !(await twofa.isEnabled(cq, u.id)) ? { enrol2fa: true } : {}) });
   }));
   app.post('/api/auth/logout', (req, res) => { res.clearCookie('lp_session', { path: '/' }); res.json({ ok: true }); });
   app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null }));
@@ -122,7 +134,8 @@ function createApp({ db = open(), stripe, fetchImpl, mailEnv = process.env, llm 
     const p = PwSchema.safeParse(req.body); if (!p.success) return bad(res, p.error);
     if (!(await bcrypt.compare(p.data.currentPassword, req.user.password_hash))) return res.status(401).json({ error: 'Current password is incorrect' });
     if (p.data.newPassword === p.data.currentPassword) return res.status(400).json({ error: 'Choose a different new password' });
-    db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(await bcrypt.hash(p.data.newPassword, 12), req.user.id); res.json({ ok: true });
+    db.prepare('UPDATE users SET password_hash=?, session_epoch=session_epoch+1 WHERE id=?').run(await bcrypt.hash(p.data.newPassword, 12), req.user.id); // signs out every other device
+    setSession(res, db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)); res.json({ ok: true });
   }));
   app.delete('/api/me', needAuth, (req, res) => { if (isTester(req.user)) return res.status(403).json({ error: 'The shared test account can’t be deleted from the site' }); db.prepare('DELETE FROM users WHERE id=?').run(req.user.id); res.clearCookie('lp_session', { path: '/' }); res.json({ ok: true }); });
 
