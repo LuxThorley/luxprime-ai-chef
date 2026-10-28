@@ -22,6 +22,7 @@ import chat from '../../src/chat.js';
 import memory from '../../src/memory.js';
 import acctEmail from '../../src/account-email.js';
 import assistant from '../../src/assistant.js';
+import tools from '../../src/tools.js';
 import dioscorides from '../../src/dioscorides.js';
 import verifyMod from '../../src/verify.js';
 import mailer from '../../src/mailer.js';
@@ -260,39 +261,75 @@ async function aiBudget(c, kind) { // daily cap keeps usage inside the Workers A
 }
 async function asstMemory(c) { const u = c.get('user'); if (!u) return null; const v = await c.env.IMAGES.get(assistant.memKey(u.id)); return v ? JSON.parse(v) : null; }
 // Persona/character sync: ASSISTANT_SYNC=malcolm routes chat through the Malcolm AI worker's /v1/chat (service binding,
-// MALCOLM_AI_KEY secret, server-side only, 12 s timeout) and falls back to the free Workers AI model, then to the offline library.
+// MALCOLM_AI_KEY secret, server-side only). Reliability: one Malcolm attempt capped at ASSISTANT_TIMEOUT_MS (18 s default;
+// Malcolm already tries Gemini lite -> Gemini -> Groq inside), a 60 s circuit breaker after a Malcolm failure so members
+// aren't made to wait on a known-bad upstream, then the free Workers AI model (own 12 s cap), then the offline library.
+const ASST_MAX_TOKENS = 1200;
+let malcolmDownUntil = 0; // per-isolate circuit breaker
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + ' timeout')), ms))]);
 const asstLlm = c => { if (c.env.ASSISTANT_AI === 'off') return null; const E = c.env; const model = E.ASSISTANT_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast';
   // Free Cloudflare model, plain text (no JSON response_format for prose chat).
-  const wai = E.AI ? async (messages, { maxTokens = 450 } = {}) => { const out = await E.AI.run(model, { messages, max_tokens: maxTokens, temperature: 0.6 }); const t = out && (out.response ?? out); return { text: typeof t === 'string' ? t : JSON.stringify(t), provider: 'workers-ai' }; } : null;
+  // Free-allocation guard: llama-3.1-8b fp8-fast ≈ 4,119 neurons/M input + 34,868/M output, so a ~1.2k-in/700-out fallback reply ≈ 30 neurons;
+  // ASSISTANT_WAI_DAILY (200) fallback replies ≈ 6,000 of the 10,000 free neurons/day, leaving room for fridge scans and FLUX photos.
+  const wai = E.AI ? async (messages, { maxTokens = ASST_MAX_TOKENS } = {}) => { if (!(await chat.allow(cq(c), `asst-wai:${new Date().toISOString().slice(0, 10)}`, +(E.ASSISTANT_WAI_DAILY || 200), 86400)).ok) throw new Error('workers-ai daily fallback cap reached');
+    const out = await withTimeout(E.AI.run(model, { messages, max_tokens: Math.min(maxTokens, 700), temperature: 0.6 }), +(E.ASSISTANT_WAI_TIMEOUT_MS || 12000), 'workers-ai'); const t = out && (out.response ?? out); return { text: typeof t === 'string' ? t : JSON.stringify(t), provider: 'workers-ai' }; } : null;
   const base = String(E.MALCOLM_AI_URL || '').replace(/\/+$/, '').replace(/\/(omni\/command|v1\/recipes)$/, '');
   if (E.ASSISTANT_SYNC !== 'malcolm' || !E.MALCOLM_AI_KEY || !base) return wai;
   const mf = malcolmFetch(E);
   return async (messages, opts = {}) => {
     const day = new Date().toISOString().slice(0, 10);
-    if ((await chat.allow(cq(c), `asst-sync:${day}`, +(E.ASSISTANT_SYNC_DAILY || 300), 86400)).ok) {
-      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), +(E.ASSISTANT_TIMEOUT_MS || 12000));
-      try { const r = await mf(base + '/v1/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${E.MALCOLM_AI_KEY}` }, body: JSON.stringify({ system: messages[0].content, messages: messages.slice(1), maxTokens: opts.maxTokens || 450, format: "text" }) });
+    if (Date.now() < malcolmDownUntil) console.warn('assistant malcolm circuit open, using fallback');
+    else if ((await chat.allow(cq(c), `asst-sync:${day}`, +(E.ASSISTANT_SYNC_DAILY || 300), 86400)).ok) {
+      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), +(E.ASSISTANT_TIMEOUT_MS || 18000)); const t0 = Date.now();
+      try { const r = await mf(base + '/v1/chat', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${E.MALCOLM_AI_KEY}` }, body: JSON.stringify({ system: messages[0].content, messages: messages.slice(1), maxTokens: opts.maxTokens || ASST_MAX_TOKENS, format: "text" }) });
         if (!r.ok) throw new Error('malcolm sync HTTP ' + r.status); const j = await r.json(); if (!j.text) throw new Error('malcolm sync empty');
-        return { text: j.text, provider: 'malcolm-sync' + (j.provider ? ':' + j.provider : '') };
-      } catch (e) { console.error('assistant malcolm sync failed', e && e.message); } finally { clearTimeout(t); }
+        return { text: j.text, provider: 'malcolm-sync' + (j.provider ? ':' + j.provider : ''), ms: Date.now() - t0 };
+      } catch (e) { console.error('assistant malcolm sync failed', e && e.message); malcolmDownUntil = Date.now() + 60000; } finally { clearTimeout(t); }
     } else console.warn('assistant malcolm sync daily cap reached');
     if (!wai) throw new Error('no fallback model'); return wai(messages, opts);
   };
 };
+// Assistant tools (src/tools.js): deterministic intent routing -> owner-scoped actions; never driven by free-form model output.
+const toolCtx = (c, u, mem) => ({ q: cq(c), u, mem, can: assistant.can, isPremium,
+  allow: (bucket, limit, sec) => chat.allow(cq(c), bucket, limit, sec),
+  imageFor: async r => { const key = await dishimage.imageKey(r); const alt = dishimage.altText(r); await db(c).prepare('INSERT OR IGNORE INTO dish_images(key,title,prompt,alt) VALUES(?,?,?,?)').bind(key, String(r.title).slice(0, 140), dishimage.buildPrompt(r), alt).run(); return { src: `/api/dish-image/${key}`, alt, fallback: imagesMod.curatedImage(r).large }; },
+  newRecipe: async dish => { const p = SearchSchema.safeParse({ dish, skipClarify: true, inspirationMode: 'malcolm' }); if (!p.success) return [400, { error: 'Describe the dish in a few words' }]; return doSearch(c, u, p.data); } });
 async function asstRefs(c, msg) { try { if (!/\b(sauce|stock|classic|french|technique|escoffier|roast|braise|pastry|souffl|consomm|velout|béchamel|bechamel|hollandaise)/i.test(msg)) return []; return (await escoffier.list(d1all(c), { q: msg.slice(0, 100) })).entries.slice(0, 2); } catch { return []; } }
 app.get('/api/assistant/hello', async c => { const u = c.get('user'); const mem = await asstMemory(c); const tier = assistant.tierOf(u);
   return c.json({ greeting: assistant.greet(u, mem), tier, signedIn: !!u, planName: u ? plansMod.planName(u) : null, features: Object.fromEntries(Object.keys(assistant.FEATURES).map(f => [f, assistant.can(u, f)])), memory: mem, disclosure: assistant.AI_DISCLOSURE, ai: !!asstLlm(c) }); });
+async function assistantTurn(c, data) {
+  const u = c.get('user');
+  const mem = (await asstMemory(c)) || (data.localMemory ? assistant.cleanMemory({ ...data.localMemory, consent: true }) : null);
+  const memCtx = u ? await memory.contextFor(cq(c), u.id, data.message).catch(() => '') : ''; // signed-out visitors: nothing stored, nothing recalled; consent off / paused / cleared -> ''
+  let tool = null; const det = tools.detect(data.message, { lastRecipeIds: data.lastRecipeIds, confirm: data.confirm });
+  if (det) { try { tool = await tools.execute(det, toolCtx(c, u, mem)); } catch (e) { console.error('assistant tool', det.name, e && e.message); tool = { name: det.name, ok: false, reply: 'That action didn’t go through just now — nothing was changed. Try again in a moment?' }; } }
+  const llm = asstLlm(c) && (await aiBudget(c, 'chat')) ? memory.withMemory(asstLlm(c), memCtx) : null;
+  const out = await assistant.respond(data, { llm, mem, u, refs: await asstRefs(c, data.message), tool, maxTokens: ASST_MAX_TOKENS });
+  if (u) await memory.recordChat(cq(c), u.id, [{ role: 'user', text: data.message }, { role: 'malcolm', text: out.reply }], { surface: 'assistant', env: c.env }).catch(e => console.error('memory chat', e && e.message));
+  return { ...out, memoryUsed: !!memCtx };
+}
 app.post('/api/assistant/chat', rl('asst-ip', 40, 300), async c => {
   const p = assistant.ChatReq.safeParse(await body(c)); if (!p.success) return bad(c, p.error); const u = c.get('user');
   const lim = await chat.allow(AQ(c), u ? `asst:u${u.id}` : `asst:ip:${c.req.header('cf-connecting-ip') || 'anon'}`, isPremium(u) ? assistant.LIMITS.paid : assistant.LIMITS.free);
   if (!lim.ok) return c.json({ error: `Malcolm needs a breather — try again in ${Math.ceil(lim.retryAfter / 60)} min${isPremium(u) ? '' : ' (members get more chats)'}.`, upgrade: isPremium(u) ? null : '/pricing.html' }, 429);
-  const mem = (await asstMemory(c)) || (p.data.localMemory ? assistant.cleanMemory({ ...p.data.localMemory, consent: true }) : null);
-  const memCtx = u ? await memory.contextFor(cq(c), u.id, p.data.message).catch(() => '') : ''; // signed-out visitors: nothing stored, nothing recalled
-  const llm = asstLlm(c) && (await aiBudget(c, 'chat')) ? memory.withMemory(asstLlm(c), memCtx) : null;
-  const out = await assistant.respond(p.data, { llm, mem, u, refs: await asstRefs(c, p.data.message) });
-  if (u) await memory.recordChat(cq(c), u.id, [{ role: 'user', text: p.data.message }, { role: 'malcolm', text: out.reply }], { surface: 'assistant', env: c.env }).catch(e => console.error('memory chat', e && e.message));
-  return c.json({ ...out, chatLeft: lim.left });
+  const wantStream = c.req.query('stream') === '1' || /text\/event-stream/.test(c.req.header('accept') || '');
+  if (!wantStream) return c.json({ ...(await assistantTurn(c, p.data)), chatLeft: lim.left });
+  // SSE: an immediate "status" event, then the reply in small chunks, then "done" with the full JSON (cards, tool result, notes).
+  // Malcolm /v1/chat returns whole replies (no upstream streaming yet), so chunks are paced out once the reply arrives.
+  const enc = new TextEncoder(); const ts = new TransformStream(); const w = ts.writable.getWriter();
+  const ev = (name, obj) => w.write(enc.encode(`event: ${name}\ndata: ${JSON.stringify(obj)}\n\n`));
+  c.executionCtx.waitUntil((async () => {
+    try { await ev('status', { text: 'Malcolm is thinking…' });
+      const out = await assistantTurn(c, p.data); const words = String(out.reply).split(/(\s+)/);
+      for (let i = 0; i < words.length; i += 6) await ev('delta', { text: words.slice(i, i + 6).join('') });
+      await ev('done', { ...out, chatLeft: lim.left });
+    } catch (e) { console.error('assistant stream', e && e.message); await ev('error', { error: 'Sorry — I dropped a pan. Try again?' }).catch(() => {}); }
+    finally { await w.close().catch(() => {}); }
+  })());
+  return new Response(ts.readable, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
 });
+app.get('/api/assistant/shopping-list', needAuth, async c => { const u = c.get('user'); if (!assistant.can(u, 'shopping')) return c.json(assistant.gate(u, 'shopping'), 402); return c.json({ items: await tools.listShopping(cq(c), u.id) }); });
+app.delete('/api/assistant/shopping-list', needAuth, async c => { const u = c.get('user'); if (c.req.query('confirm') !== 'yes') return c.json({ error: 'Add ?confirm=yes to clear your whole list' }, 400); await db(c).prepare('DELETE FROM shopping_items WHERE user_id=?').bind(u.id).run(); return c.json({ ok: true, items: [] }); });
 app.get('/api/assistant/memory', needAuth, async c => c.json({ memory: await asstMemory(c) }));
 app.put('/api/assistant/memory', needAuth, async c => { const m = assistant.cleanMemory(await body(c)); if (!m) return bad(c, assistant.Memory.safeParse(await body(c)).error || {}); await c.env.IMAGES.put(assistant.memKey(c.get('user').id), JSON.stringify(m)); return c.json({ ok: true, memory: m }); });
 app.delete('/api/assistant/memory', needAuth, async c => { await c.env.IMAGES.delete(assistant.memKey(c.get('user').id)); return c.json({ ok: true, deleted: true }); });

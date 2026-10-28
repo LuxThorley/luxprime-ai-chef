@@ -2,7 +2,7 @@
 // Malcolm personal memory: opt-in, per-member, first-party only. Works with any async q = { all, get, run } (D1 or SQLite).
 const CONSENT_VERSION = '2026-10-1';
 const KINDS = ['page_view', 'recipe_view', 'recipe_save', 'menu_builder', 'kitchen_pack'];
-const LIMITS = { chatText: 1500, recentChats: 6, scanChats: 60, scanRows: 200, block: 900, systemCap: 4000 };
+const LIMITS = { chatText: 1500, recentChats: 6, scanChats: 60, scanRows: 200, block: 1200, recentSearches: 3, systemCap: 4000 };
 const retentionDays = env => Math.max(7, Math.min(730, +((env || {}).MEMORY_RETENTION_DAYS) || 365));
 const off = { chat: false, search: false, behaviour: false, paused: false, version: null, consentedAt: null, updatedAt: null, recorded: false };
 
@@ -104,25 +104,32 @@ function profileLine(p) {
   return bits.join('; ');
 }
 // Compact block for the system prompt; hard-capped so the system message never exceeds Malcolm's 4,000-character per-message limit.
-function memoryBlock(profile, chats = [], { max = LIMITS.block } = {}) {
+function memoryBlock(profile, chats = [], { max = LIMITS.block, searches = [] } = {}) {
   const head = 'MEMBER MEMORY (shared by this member with consent; use it gently to personalise, never recite it back verbatim, never assume beyond it; their current message always wins):';
   const pl = profileLine(profile); const lines = [];
   if (pl) lines.push('Profile: ' + pl.slice(0, Math.floor(max * 0.55)));
+  const rs = (searches || []).map(x => { try { const j = typeof x === 'string' ? JSON.parse(x) : x; return [j.dish, (j.include || []).join(', ')].filter(Boolean).join(' with ').slice(0, 80); } catch { return ''; } }).filter(Boolean);
+  if (rs.length) lines.push('Recent searches: ' + rs.join('; '));
   if (chats.length) { lines.push('Earlier conversation:'); for (const c of chats) lines.push(`- ${c.role === 'user' ? 'Member' : 'Malcolm'}: ${clean(c.text).replace(/\s+/g, ' ').slice(0, 160)}`); }
   if (!lines.length) return '';
   let out = head + '\n' + lines.join('\n');
-  while (out.length > max && lines.length > 1) { lines.splice(pl ? 2 : 1, 1); if (lines[lines.length - 1] === 'Earlier conversation:') lines.pop(); out = head + '\n' + lines.join('\n'); }
+  while (out.length > max && lines.length > 1) { const h = lines.indexOf('Earlier conversation:'); if (h >= 0 && lines.length > h + 1) lines.splice(h + 1, 1); else if (h >= 0) lines.splice(h, 1); else { const si = lines.findIndex(x => x.startsWith('Recent searches: ')); if (si >= 0) lines.splice(si, 1); else break; } out = head + '\n' + lines.join('\n'); }
   return out.slice(0, max);
 }
 function withMemory(llm, block, { cap = LIMITS.systemCap } = {}) {
   if (!llm || !block) return llm;
-  return (messages, opts) => { const m = messages.slice(); if (m[0] && m[0].role === 'system') { const room = cap - m[0].content.length - 2; if (room > 80) m[0] = { ...m[0], content: m[0].content + '\n\n' + block.slice(0, room) }; } return llm(m, opts); };
+  return (messages, opts) => { const m = messages.slice(); if (m[0] && m[0].role === 'system') {
+      // Make room by shortening the site-knowledge excerpts (never the persona, rules or tool result) so memory always fits.
+      const need = m[0].content.length + 2 + Math.min(block.length, 600) - cap; const k = m[0].content.indexOf('KNOWLEDGE ('); const e = k >= 0 ? m[0].content.indexOf('\nLibrary recipes', k) : -1;
+      if (need > 0 && k >= 0 && e > k) { const sec = m[0].content.slice(k, e); m[0] = { ...m[0], content: m[0].content.slice(0, k) + sec.slice(0, Math.max(60, sec.length - need)) + '…' + m[0].content.slice(e) }; }
+      const room = cap - m[0].content.length - 2; if (room > 80) m[0] = { ...m[0], content: m[0].content + '\n\n' + block.slice(0, room) }; } return llm(m, opts); };
 }
 async function contextFor(q, uid, message) {
   const c = await getConsent(q, uid); if (!uid || !c.recorded || c.paused) return '';
   const profile = (allowed(c, 'search') || allowed(c, 'behaviour')) ? await getProfile(q, uid) : null;
   const chats = allowed(c, 'chat') ? await relevantChats(q, uid, message) : [];
-  return memoryBlock(profile, chats);
+  const searches = allowed(c, 'search') ? (await q.all('SELECT query_json FROM member_searches WHERE user_id=? ORDER BY created_at DESC LIMIT ?', [uid, LIMITS.recentSearches])).map(r => r.query_json) : [];
+  return memoryBlock(profile, chats, { searches });
 }
 // Optional: fill only blanks the member didn't set (never adds diets or exclusions on their behalf).
 function biasSearch(raw = {}, data, profile) {

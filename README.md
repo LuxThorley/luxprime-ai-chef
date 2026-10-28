@@ -200,3 +200,17 @@ A floating **Ask Malcolm** companion on every page (`public/js/malcolm-widget.js
 * **AI.** The default is Workers AI `llama-3.1-8b-instruct-fast` on the free allocation, capped at 600/day. `ASSISTANT_SYNC=malcolm` (enabled 27 Oct 2026, capped by `ASSISTANT_SYNC_DAILY`=300/day) routes through the Malcolm worker `/v1/chat` (service binding plus the `MALCOLM_AI_KEY` secret, 12 s timeout, falling back to Workers AI and then the library). `ASSISTANT_AI=off` gives library-only mode.
 * **Local run:** `cd worker && npx wrangler d1 migrations apply luxprime-ai-chef-db --local -c wrangler.local.jsonc && npx wrangler dev -c wrangler.local.jsonc`. This uses local-only bindings, with no AI, Stripe or crons. Tests: `npm test` (`test/assistant.test.js`). Browser e2e: `BASE=http://127.0.0.1:8799 node ../../e2e/malcolm.mjs`.
 * See `COSTS.md` (confirmed £0) and `PRIVACY_MALCOLM_DRAFT.md`.
+
+## Malcolm assistant upgrades (`feature/malcolm-assistant-upgrades`)
+- **Tools** (`src/tools.js`): deterministic intent routing — never free-form model output — runs owner-scoped actions for the signed-in member:
+  recipe search (library + Malcolm `/v1/recipes` for “invent a new recipe…”), save to favourites (paid plans), scale servings, UK14 allergen check
+  (never re-worded by the model), shopping list add/show/remove/clear (Chef de Partie+; clearing asks for confirmation). Malcolm then narrates the
+  real result (“ACTION ALREADY TAKEN …” in the system prompt). New table: `migrations/0013_shopping_list.sql`.
+- **Memory**: consented profile + recent searches + relevant chat turns are injected, capped (1,200 chars) and always fit Malcolm’s 4,000-char
+  system limit (site-knowledge excerpts are shortened first). Nothing for signed-out visitors, paused consent, or after Clear History.
+- **Streaming**: `POST /api/assistant/chat?stream=1` (or `Accept: text/event-stream`) → `status`, `delta`…, `done` SSE events; the widget falls back to
+  plain JSON automatically. Malcolm returns whole replies today, so deltas are paced from the finished reply. Replies up to ~1,200 tokens.
+- **Images in chat**: “show me a photo of …” registers the dish in `dish_images` and returns a lazy `/api/dish-image/:key` button.
+- **Reliability**: one Malcolm attempt capped at 18 s (`ASSISTANT_TIMEOUT_MS`), 60 s circuit breaker, then Workers AI (12 s, 200/day), then the offline library.
+  Malcolm-side chain reorder is prepared in `patches/malcolm-chat-chain-REVIEW-ONLY.md` (not deployed).
+- **Staging**: `worker/wrangler.staging.jsonc` → `luxprime-ai-chef-staging` with its own empty D1 + KV (no crons, Stripe or email).
