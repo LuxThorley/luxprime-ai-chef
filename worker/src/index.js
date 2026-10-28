@@ -31,6 +31,7 @@ import kwMod from '../../src/keywords.js';
 import giftMod from '../../src/gift.js';
 import weekly from '../../src/weekly.js';
 import nutritionMod from '../../src/nutrition.js';
+import { mountBufferRoutes } from './buffer-routes.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal','slimming'];
@@ -912,6 +913,8 @@ app.post('/api/billing/portal', needAuth, async c => {
   const s = await stripeApi(c.env.STRIPE_SECRET_KEY, 'billing_portal/sessions', { customer: await liveCustomer(c, u), return_url: `${appUrl(c)}/account.html` });
   return c.json({ url: s.url });
 });
+// ---- Buffer social DRAFTS (admin only; never publishes) ----
+mountBufferRoutes(app, { needAuth, isAdmin, rl, body, CR, cctx, randomId });
 app.all('/api/*', c => c.json({ error: 'Not found' }, 404));
 app.onError((err, c) => { console.error(err && err.stack || err); return c.json({ error: 'Something went wrong' }, 500); });
 // Everything else: static assets (html_handling resolves /app -> app.html).
