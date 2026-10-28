@@ -205,7 +205,7 @@ A floating **Ask Malcolm** companion on every page (`public/js/malcolm-widget.js
 - **Tools** (`src/tools.js`): deterministic intent routing — never free-form model output — runs owner-scoped actions for the signed-in member:
   recipe search (library + Malcolm `/v1/recipes` for “invent a new recipe…”), save to favourites (paid plans), scale servings, UK14 allergen check
   (never re-worded by the model), shopping list add/show/remove/clear (Chef de Partie+; clearing asks for confirmation). Malcolm then narrates the
-  real result (“ACTION ALREADY TAKEN …” in the system prompt). New table: `migrations/0012_shopping_list.sql`.
+  real result (“ACTION ALREADY TAKEN …” in the system prompt). New table: `migrations/0013_shopping_list.sql`.
 - **Memory**: consented profile + recent searches + relevant chat turns are injected, capped (1,200 chars) and always fit Malcolm’s 4,000-char
   system limit (site-knowledge excerpts are shortened first). Nothing for signed-out visitors, paused consent, or after Clear History.
 - **Streaming**: `POST /api/assistant/chat?stream=1` (or `Accept: text/event-stream`) → `status`, `delta`…, `done` SSE events; the widget falls back to

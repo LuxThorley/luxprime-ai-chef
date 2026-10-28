@@ -7,7 +7,7 @@ function setup() {
   const db = new Database(':memory:');
   db.exec('CREATE TABLE users(id INTEGER PRIMARY KEY, email TEXT, plan TEXT, sub_status TEXT); INSERT INTO users(id) VALUES(1),(2),(99);');
   db.exec("CREATE TABLE favourites (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, recipe_id TEXT NOT NULL, recipe_json TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(user_id, recipe_id));");
-  db.exec(fs.readFileSync(path.join(__dirname, '../worker/migrations/0012_shopping_list.sql'), 'utf8'));
+  db.exec(fs.readFileSync(path.join(__dirname, '../worker/migrations/0013_shopping_list.sql'), 'utf8'));
   const q = { all: async (s, p = []) => db.prepare(s).all(...p), get: async (s, p = []) => db.prepare(s).get(...p) || null, run: async (s, p = []) => db.prepare(s).run(...p) };
   const paid = { id: 1, email: 'p@x.co', plan: 'monthly', sub_status: 'active' }; const free = { id: 2, email: 'f@x.co', plan: 'free', sub_status: null };
   const allowed = new Map();
