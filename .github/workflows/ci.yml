@@ -14,7 +14,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
+      - run: npm ci && npm ci --prefix worker
       - run: npm test
       - run: node scripts/build-static.js
       - name: Secret scan of repository
