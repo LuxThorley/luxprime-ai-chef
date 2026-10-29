@@ -24,3 +24,5 @@ export async function verifyStripeSignature(payload, header, secret, toleranceSe
   const expected = hex(await crypto.subtle.sign('HMAC', key, enc.encode(`${t}.${payload}`)));
   return sigs.some(s => timingSafeEqualStr(s, expected));
 }
+// SHA-256 hex digest (session IDs and throttle keys are stored only as hashes).
+export async function sha256Hex(s) { return hex(await crypto.subtle.digest('SHA-256', enc.encode(String(s)))); }
