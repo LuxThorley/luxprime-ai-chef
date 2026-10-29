@@ -1,0 +1,4 @@
+# Fake credential-shaped test fixtures (not real secrets) in superseded PR #6's commit c69ea51 —
+# the fixtures were rewritten to be assembled at runtime in PR #7. Exact fingerprints only.
+c69ea51e6b0b02baa655398f9acfb66b924bb7c2:test/hardening-round2.test.js:stripe-access-token:81
+c69ea51e6b0b02baa655398f9acfb66b924bb7c2:test/hardening-round2.test.js:jwt:81
