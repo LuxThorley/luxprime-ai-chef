@@ -48,6 +48,9 @@ const RegisterSchema = AuthSchema.extend({ confirmPassword: z.string().max(200).
 const RecipeBlob = z.object({ id: z.string().max(120), title: z.string().max(140) }).passthrough();
 const SESSION_DAYS = 30;
 
+// Security headers — static assets get the same set from public/_headers (keep both in step).
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' data: blob:; worker-src 'self' blob:; manifest-src 'self'; frame-src 'self'; form-action 'self' https://checkout.stripe.com https://billing.stripe.com; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; upgrade-insecure-requests";
+const SEC_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'X-Frame-Options': 'DENY', 'Permissions-Policy': 'camera=(self), microphone=(self), geolocation=(), payment=(), usb=(), browsing-topics=()', 'Cross-Origin-Opener-Policy': 'same-origin', 'Strict-Transport-Security': 'max-age=31536000; includeSubDomains' };
 const app = new Hono();
 const appUrl = c => (c.env.APP_URL || new URL(c.req.url).origin).replace(/\/$/, '');
 const db = c => c.env.DB;
@@ -60,11 +63,9 @@ app.use('*', async (c, next) => {
   for (const [k, v] of Object.entries(c.env)) if (typeof v === 'string') process.env[k] = v;
   await next();
   const h = c.res.headers;
-  h.set('X-Content-Type-Options', 'nosniff'); h.set('Referrer-Policy', 'strict-origin-when-cross-origin'); h.set('X-Frame-Options', 'SAMEORIGIN'); h.set('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(), payment=(), usb=(), interest-cohort=()'); h.set('Cross-Origin-Opener-Policy', 'same-origin');
-  h.set('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  for (const [k, v] of Object.entries(SEC_HEADERS)) h.set(k, v);
   if (c.req.path.startsWith('/api/') && !h.has('Cache-Control')) h.set('Cache-Control', 'no-store');
-  if ((h.get('content-type') || '').includes('text/html') || c.req.path.startsWith('/api/'))
-    h.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; form-action 'self' https://checkout.stripe.com; frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
+  if ((h.get('content-type') || '').includes('text/html') || c.req.path.startsWith('/api/')) h.set('Content-Security-Policy', CSP);
 });
 
 // Simple D1-backed fixed-window rate limiter.

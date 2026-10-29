@@ -10,7 +10,7 @@
   function NP(r){const N=window.Nutrition;if(N&&(!r.nutrition||!r.nutrition.lights))N.attach(r);const n=r.nutrition;if(!n)return'';const L=n.lights||{};
     const val=(o,k)=>k==='energy'?`${f1(o.energyKj)} kJ<br>${f1(o.energyKcal)} kcal`:`${f1(o[k])} g`;
     const chip=k=>{const l=L[k];if(!l)return'';const txt=l.label==='MEDIUM'?'MED':l.label;return `<span class="tl${l.positive?' pos':''}${l.neutral?' neu':''}" style="--tl:${l.colour}" title="${esc(k==='energy'?'Energy per serving as % of the 2000 kcal Reference Intake':l.positive?(k==='fibreG'?'Fibre: HIGH ≥6 g/100 g, SOURCE ≥3 g/100 g':'Protein: HIGH ≥20% of energy, SOURCE ≥12%'):'FSA front-of-pack: per 100 g (and per portion when over 100 g)')}">${esc(txt)}</span>`};
-    return `<h4>Nutrition <small class="muted">(guide values, estimated)</small> <button type="button" class="info-tip" aria-label="About these values" title="${esc(N?N.SOURCES:'')}" onclick="this.nextElementSibling.hidden=!this.nextElementSibling.hidden">ⓘ</button><span class="tl-src" hidden>${esc(N?N.SOURCES:'')}</span></h4>
+    return `<h4>Nutrition <small class="muted">(guide values, estimated)</small> <button type="button" class="info-tip" aria-label="About these values" title="${esc(N?N.SOURCES:'')}">ⓘ</button><span class="tl-src" hidden>${esc(N?N.SOURCES:'')}</span></h4>
     <p class="muted" style="font-size:.8rem;margin:.2em 0">Whole dish serves ${esc(n.servings)} · estimated total weight ${esc(n.totalWeightG)} g (≈${esc(n.portionG)} g per serving)${n.method==='estimated'?' · partly Malcolm’s estimate':''}</p>
     <div class="nutri-wrap"><table class="nutri-t"><thead><tr><th scope="col">Nutrient</th><th scope="col">Per serving</th><th scope="col">Rating</th><th scope="col">Per 100 g</th><th scope="col">Whole dish</th></tr></thead><tbody>
     ${NROWS.map(([k,lab])=>`<tr><th scope="row">${lab}</th><td>${val(n.perServing,k)}</td><td>${chip(k)}</td><td>${val(n.per100g,k)}</td><td>${val(n.total,k)}</td></tr>`).join('')}</tbody></table></div>
@@ -122,3 +122,5 @@
   window.RecipeView={card,pdf,imageCard,hydrate,RB,bindRate,paint};
 })();
 /* dish-images v2 */
+// CSP-safe toggle for the nutrition sources tip (no inline handlers).
+document.addEventListener('click',e=>{const b=e.target&&e.target.closest&&e.target.closest('.info-tip');if(b&&b.nextElementSibling&&b.nextElementSibling.classList.contains('tl-src'))b.nextElementSibling.hidden=!b.nextElementSibling.hidden});

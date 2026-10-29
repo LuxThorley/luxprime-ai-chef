@@ -19,3 +19,22 @@ jobs:
       - run: node scripts/build-static.js
       - name: Secret scan of repository
         run: "! git grep -nE 'eyJhb[G]ci|sk_(l[i]ve|t[e]st)_[A-Za-z0-9]{10,}' -- . ':!package-lock.json'"
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks (pinned, checksum-verified)
+        run: |
+          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar xzf gitleaks.tgz gitleaks && rm gitleaks.tgz
+      - name: Scan full git history
+        run: ./gitleaks git --redact --no-banner -v .
+      - name: Scan working tree
+        run: ./gitleaks dir --redact --no-banner -v .
