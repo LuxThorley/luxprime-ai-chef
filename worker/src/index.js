@@ -9,7 +9,12 @@ import recipesMod from '../../src/recipes.js';
 import imagesMod from '../../src/images.js';
 import escoffier from '../../src/escoffier.js';
 import dishimage from '../../src/dishimage.js';
-import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSafeEqualStr } from './crypto.js';
+import { hashPassword, verifyPassword, randomId, verifyStripeSignature, timingSafeEqualStr, sha256Hex } from './crypto.js';
+import * as loginGuard from './loginguard.js';
+import { installLogRedaction } from './logredact.js';
+import { securityTxt } from './securitytxt.js';
+installLogRedaction();
+const sidHash = sid => sha256Hex('sid:' + sid); // D1 stores only this hash of the session cookie
 import { stripeApi , stripeGet } from './stripe.js';
 import stripeCust from '../../src/stripecust.js';
 import * as magW from './magazine.js';
@@ -147,7 +152,7 @@ app.use('/api/*', async (c, next) => {
   }
   const sid = getCookie(c, 'lp_session');
   if (sid) {
-    const u = await db(c).prepare('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?').bind(sid, Date.now()).first();
+    const u = await db(c).prepare('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?').bind(await sidHash(sid), Date.now()).first();
     if (u) c.set('user', await members.effectiveUser(db(c), u, c.env.IMAGES));
   }
   await next();
@@ -155,7 +160,7 @@ app.use('/api/*', async (c, next) => {
 const needAuth = async (c, next) => c.get('user') ? next() : c.json({ error: 'Please sign in' }, 401);
 const needPremium = async (c, next) => isPremium(c.get('user')) ? next() : c.json({ error: 'This is a premium feature — upgrade to unlock', upgrade: '/pricing.html' }, 402);
 async function startSession(c, u) {
-  const id = randomId(32); await db(c).prepare('INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,?)').bind(id, u.id, Date.now() + SESSION_DAYS * 864e5).run();
+  const id = randomId(32); await db(c).prepare('INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,?)').bind(await sidHash(id), u.id, Date.now() + SESSION_DAYS * 864e5).run();
   setCookie(c, 'lp_session', id, { httpOnly: true, sameSite: 'Lax', secure: new URL(c.req.url).protocol === 'https:', maxAge: SESSION_DAYS * 86400, path: '/' });
 }
 const body = async c => { try { return await c.req.json(); } catch { return {}; } };
@@ -181,12 +186,15 @@ app.post('/api/auth/verify/resend', rl('verify-resend', 5, 3600), needAuth, asyn
 });
 app.post('/api/auth/login', rl('auth', 20, 900), async c => {
   const p = AuthSchema.safeParse(await body(c)); if (!p.success) return c.json({ error: 'Incorrect email or password' }, 401);
+  const g = await loginGuard.check(db(c), p.data.email); // per-account throttle (same answer whether or not the account exists)
+  if (g.locked) { c.header('Retry-After', String(g.retryAfterSec)); return c.json({ error: `Too many sign-in attempts for this account — please try again in ${Math.ceil(g.retryAfterSec / 60)} minute${g.retryAfterSec > 60 ? 's' : ''}, or reset your password`, retryAfter: g.retryAfterSec }, 429); }
   const u = await db(c).prepare('SELECT * FROM users WHERE email=?').bind(p.data.email).first();
   const ok = await verifyPassword(p.data.password, u ? u.password_hash : null);
-  if (!u || !ok) return c.json({ error: 'Incorrect email or password' }, 401);
+  if (!u || !ok) { await loginGuard.fail(db(c), p.data.email); return c.json({ error: 'Incorrect email or password' }, 401); }
+  await loginGuard.clear(db(c), p.data.email);
   await startSession(c, u); return c.json({ user: publicUser(u) });
 });
-app.post('/api/auth/logout', async c => { const sid = getCookie(c, 'lp_session'); if (sid) await db(c).prepare('DELETE FROM sessions WHERE id=?').bind(sid).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
+app.post('/api/auth/logout', async c => { const sid = getCookie(c, 'lp_session'); if (sid) await db(c).prepare('DELETE FROM sessions WHERE id=?').bind(await sidHash(sid)).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
 app.get('/api/me', c => c.json({ user: publicUser(c.get('user')) || null }));
 const PwSchema = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200), confirmPassword: z.string().max(200).optional() }).refine(d => d.confirmPassword === undefined || d.confirmPassword === d.newPassword, { message: 'New passwords don’t match', path: ['confirmPassword'] });
 app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
@@ -195,10 +203,12 @@ app.post('/api/auth/password', rl('auth', 20, 900), needAuth, async c => {
   if (p.data.newPassword === p.data.currentPassword) return c.json({ error: 'Choose a different new password' }, 400);
   const sid = getCookie(c, 'lp_session');
   await db(c).batch([db(c).prepare('UPDATE users SET password_hash=? WHERE id=?').bind(await hashPassword(p.data.newPassword), u.id),
-    db(c).prepare('DELETE FROM sessions WHERE user_id=? AND id<>?').bind(u.id, sid || '')]); // sign out every other device
+    db(c).prepare('DELETE FROM sessions WHERE user_id=? AND id<>?').bind(u.id, sid ? await sidHash(sid) : '')]); // sign out every other device
   return c.json({ ok: true });
 });
 app.delete('/api/me', needAuth, async c => { if (isTester(c.get('user'))) return c.json({ error: 'The shared test account can’t be deleted from the site' }, 403); await db(c).prepare('DELETE FROM users WHERE id=?').bind(c.get('user').id).run(); deleteCookie(c, 'lp_session', { path: '/' }); return c.json({ ok: true }); });
+app.get('/.well-known/security.txt', c => new Response(securityTxt(), { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=86400' } }));
+app.get('/security.txt', c => c.redirect('/.well-known/security.txt', 301));
 app.get('/api/health', c => c.json({ ok: true, runtime: 'cloudflare-workers', ai: ai.config().provider, aiEnabled: ai.aiEnabled(), stripe: !!c.env.STRIPE_SECRET_KEY }));
 app.get('/api/plans', c => { const s = !!c.env.STRIPE_SECRET_KEY; const m = plansMod.magazine(); return c.json({ plans: Object.values(plans()).map(({ priceId, annualPriceId, ...p }) => ({ ...p, searches: p.searches === Infinity ? 'unlimited' : p.searches, available: p.id === 'free' || !!(s && priceId), availableAnnual: p.id === 'free' || !!(s && annualPriceId) })), magazine: { price: m.price, annualPrice: m.annualPrice, savePct: m.savePct } }); });
 app.get('/api/options', c => c.json({ diets: DIETS, allergens: UK14, cuisines: ['any', ...[...new Set([...RECIPES.map(r => r.cuisine), ...community.FUSION_CUISINES, 'Medicinal', ...Object.keys(kwMod.STYLE_CUISINES)])].sort()] }));
@@ -382,9 +392,9 @@ app.get('/api/account/details', needAuth, async c => AE(c, await acctEmail.statu
 app.put('/api/account/profile', rl('profile', 20, 600), needAuth, async c => AE(c, await acctEmail.updateProfile(cq(c), c.get('user'), await body(c))));
 app.post('/api/account/email', rl('email-change', 5, 3600), needAuth, async c => AE(c, await acctEmail.requestChange(cq(c), c.env, c.get('user'), await body(c), { verifyPassword, base: appUrl(c) })));
 app.post('/api/account/email/confirm', rl('email-confirm', 20, 3600), async c => {
-  const sid = getCookie(c, 'lp_session') || '';
+  const sid = getCookie(c, 'lp_session') || ''; const sidH = sid ? await sidHash(sid) : '';
   const r = await acctEmail.confirmChange(cq(c), c.env, String(((await body(c)) || {}).token || ''), {
-    revokeSessions: uid => db(c).prepare('DELETE FROM sessions WHERE user_id=? AND id!=?').bind(uid, sid).run(), // this device stays signed in
+    revokeSessions: uid => db(c).prepare('DELETE FROM sessions WHERE user_id=? AND id!=?').bind(uid, sidH).run(), // this device stays signed in
     stripeUpdate: c.env.STRIPE_SECRET_KEY ? (id, email) => stripeApi(c.env.STRIPE_SECRET_KEY, `customers/${id}`, { email }) : null });
   return AE(c, r);
 });
@@ -922,13 +932,13 @@ export default {
   fetch: app.fetch,
   // Daily cleanup of expired sessions and rate-limit rows.
   async scheduled(e, env) {
-    if (e.cron === '17 3 * * *') { await env.DB.batch([env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(Date.now()), env.DB.prepare('DELETE FROM rate_limits WHERE reset_at<?').bind(Math.floor(Date.now() / 1000))]); return; }
+    if (e.cron === '17 3 * * *') { await env.DB.batch([env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(Date.now()), env.DB.prepare('DELETE FROM rate_limits WHERE reset_at<?').bind(Math.floor(Date.now() / 1000)), env.DB.prepare('DELETE FROM login_failures WHERE last_at<? AND locked_until<?').bind(Date.now() - 864e5, Date.now())]); return; }
     // Magazine: every 20 min — enqueue on the 1st from 08:00 UK, then one issue per tick (keeps each run inside Workers/AI limits).
     globalThis.process = globalThis.process || { env: {} }; process.env = process.env || {}; for (const [k, v] of Object.entries(env)) if (typeof v === 'string') process.env[k] = v;
     try { const wl = await weeklyTick(env); if (wl.sent) console.log('weekly', JSON.stringify(wl)); } catch (e) { console.error('weekly tick', String(e.message || e).slice(0, 200)); }
     // Scheduled gift emails (sent from the chosen date, 08:00 UK-ish, by this 20-minute cron).
     try { for (const d of await giftMod.dueScheduled(env.IMAGES)) { const o = JSON.parse((await env.IMAGES.get(`giftorder/${d.orderId}`)) || 'null'); await env.IMAGES.delete(d.key); if (o && o.status === 'paid' && o.emailStatus === 'scheduled') { o.emailStatus = 'due'; await giftDeliver(env, o, appUrlEnv(env)); } } } catch (e) { console.error('gift cron', String(e.message || e).slice(0, 200)); }
-    const log = await magW.tick(env, { fetchImpl: malcolmFetch(env), base: (env.APP_URL || 'https://luxprime-ai-chef.oliverluxthorley.workers.dev').replace(/\/$/, ''), batch: +env.MAGAZINE_BATCH || 1 });
+    const log = await magW.tick(env, { fetchImpl: malcolmFetch(env), base: (env.APP_URL || 'https://aichef.food').replace(/\/$/, ''), batch: +env.MAGAZINE_BATCH || 1 });
     if (log.enqueued || log.processed.length) console.log('magazine', JSON.stringify(log));
   }
 };
