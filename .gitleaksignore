@@ -2,3 +2,6 @@
 # the fixtures were rewritten to be assembled at runtime in PR #7. Exact fingerprints only.
 c69ea51e6b0b02baa655398f9acfb66b924bb7c2:test/hardening-round2.test.js:stripe-access-token:81
 c69ea51e6b0b02baa655398f9acfb66b924bb7c2:test/hardening-round2.test.js:jwt:81
+# Same fake fixture line (jwt.io example token + a fake Stripe-shaped string), as it appears in local commit 81c00a9 (merged 31 Oct 2026).
+81c00a9f46b91f7ec4752930528636f385c810d8:test/hardening-round2.test.js:stripe-access-token:81
+81c00a9f46b91f7ec4752930528636f385c810d8:test/hardening-round2.test.js:jwt:81
