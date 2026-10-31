@@ -37,6 +37,7 @@ import giftMod from '../../src/gift.js';
 import weekly from '../../src/weekly.js';
 import nutritionMod from '../../src/nutrition.js';
 import { mountBufferRoutes } from './buffer-routes.js';
+import { mountContactRoutes } from './contact.js';
 
 const { safetyNotes, DISCLAIMER } = safety; const { plans, isPremium, isAdmin, isTester } = plansMod; const { UK14, RECIPES } = recipesMod;
 const DIETS = ['vegetarian','vegan','gluten-free','dairy-free','nut-free','halal','slimming'];
@@ -926,6 +927,7 @@ app.post('/api/billing/portal', needAuth, async c => {
 });
 // ---- Buffer social DRAFTS (admin only; never publishes) ----
 mountBufferRoutes(app, { needAuth, isAdmin, rl, body, CR, cctx, randomId });
+mountContactRoutes(app, { mailer }); // Contact form -> malcolm-mail (see contact.js)
 app.all('/api/*', c => c.json({ error: 'Not found' }, 404));
 app.onError((err, c) => { console.error(err && err.stack || err); return c.json({ error: 'Something went wrong' }, 500); });
 // Everything else: static assets (html_handling resolves /app -> app.html).

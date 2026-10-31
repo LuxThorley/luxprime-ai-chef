@@ -173,7 +173,7 @@ const GUIDE = [
   { k: /\b(escoffier|classic|french)\b/i, a: 'Escoffier’s Guide Culinaire is in our library — browse it, or ask me for a modern take on any classic.', link: '/escoffier.html', label: 'Escoffier library' },
   { k: /\b(privacy|data|gdpr|delete my|forget|memory)\b/i, a: 'Privacy: I only remember your kitchen profile if you tick consent, and you can view or delete it any time from the “My kitchen” tab in this chat. Full details in the privacy notice.', link: '/privacy.html', label: 'Privacy notice' },
   { k: /\b(magazine|issue)\b/i, a: 'The AIchef.food Magazine is included with Head Chef and above, or available on its own.', link: '/pricing.html', label: 'Magazine' },
-  { k: /\b(human|oliver|contact|complain|support|speak to|real person|help me)\b/i, a: 'I can pass a message to Oliver, the founder — use “Contact Oliver” below and he’ll reply by email.', escalate: true, label: 'Contact Oliver' }
+  { k: /\b(human|oliver|contact|complain|support|speak to|real person|help me)\b/i, a: 'I can pass a message to Oliver, the founder — use “Contact Oliver” below and he’ll reply by email. Or use the Contact page, where you can attach photos or documents and I’ll reply to you by email.', escalate: true, link: '/contact.html', label: 'Open the Contact page' }
 ];
 function guide(text) { const hit = GUIDE.find(g => g.k.test(text)); return hit ? { reply: hit.a, link: hit.link || null, label: hit.label, escalate: !!hit.escalate } : null; }
 const Escalation = z.object({ message: z.string().trim().min(5).max(1500), email: z.string().trim().email().max(200).optional() });

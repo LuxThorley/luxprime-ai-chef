@@ -37,3 +37,12 @@ On the Workers Free plan, going over the free allowance makes the AI call fail r
 | Staging worker `luxprime-ai-chef-staging` | separate D1 `luxprime-ai-chef-staging-db`, KV `aichef-staging-images` | £0 (free tier); delete when done |
 
 Workers AI pricing checked 28 Oct 2026 at developers.cloudflare.com/workers-ai/platform/pricing (10,000 free neurons/day, resets 00:00 UTC).
+
+## Contact form (feat/contact-form, 31 Oct 2026) — still £0
+| Item | What it uses | Cost / cap |
+|---|---|---|
+| `/contact.html` + `POST /api/contact` | Existing Worker + static assets | £0 (Workers Free) |
+| Spam defences | Honeypot, HMAC time-to-submit token (JWT_SECRET), existing D1 `rate_limits` (6/IP/hour, 20/IP/day, 3/email/day) | £0. No Turnstile (not configured on the site) |
+| Malcolm's reply + attachment reading | `malcolm-mail` Worker over a service binding (see that repo's COSTS.md: Workers AI `toMarkdown`, send_email to Oliver) | £0 (free tiers; image reading capped at 15 messages/day) |
+| Reply email to the sender | Existing `RESEND_API_KEY` via src/mailer.js | £0 on Resend free (100/day, 3,000/month, shared) |
+| Attachments storage | None: passed in memory, only copy is the email to Oliver | £0 |
