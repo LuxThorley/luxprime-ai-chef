@@ -1,0 +1,29 @@
+<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Contact Malcolm · AIchef.food</title><meta name="description" content="Ask Malcolm, AIchef.food's AI chef, anything: recipes, cooking questions, your account or partnerships. He reads every message, attachments included, and replies by email."><meta property="og:site_name" content="AIchef.food"><meta property="og:title" content="Contact Malcolm · AIchef.food"><meta property="og:image" content="/img/brand/og.png"><meta name="twitter:card" content="summary_large_image"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="preload" as="font" type="font/woff2" href="/fonts/fraunces-latin-700-normal.woff2" crossorigin><link rel="stylesheet" href="/css/styles.css"><script src="/js/common.js"></script><script src="/js/contact.js" defer></script><script src="/js/malcolm-widget.js" defer></script></head><body><div id="site-header"></div><main id="main">
+<section class="band contact-band" id="contact"><div class="wrap contact-wrap">
+<div class="contact-intro"><span class="eyebrow">Contact</span><h1>Get in touch with Malcolm</h1>
+<p class="lede">Ask about a recipe, a technique, your account, a partnership or anything else. Malcolm, our AI chef, reads every message (and any files you attach) and replies to you by email, usually within a minute.</p>
+<ul class="contact-points"><li><strong>Every message also reaches Oliver,</strong> the founder, who follows up personally where needed.</li><li><strong>Billing, legal, press and security</strong> messages get a short acknowledgement from Malcolm, then a personal reply from Oliver.</li><li>Prefer email? Write to <a href="mailto:malcolm@aichef.food">malcolm@aichef.food</a>.</li></ul></div>
+
+<form id="contact-form" class="card contact-form" novalidate aria-describedby="cf-intro-note">
+<p id="cf-intro-note" class="muted small">All fields are required unless marked optional.</p>
+<div id="cf-errors" class="cf-errors" role="alert" tabindex="-1" hidden></div>
+<div class="cf-row"><div><label for="cf-name">Your name</label><input id="cf-name" name="name" type="text" autocomplete="name" maxlength="80" required aria-describedby="cf-name-err"><p class="err small" id="cf-name-err" aria-live="polite"></p></div>
+<div><label for="cf-email">Your email</label><input id="cf-email" name="email" type="email" autocomplete="email" inputmode="email" maxlength="200" required aria-describedby="cf-email-hint cf-email-err"><p class="muted small" id="cf-email-hint">Malcolm's reply goes here.</p><p class="err small" id="cf-email-err" aria-live="polite"></p></div></div>
+<div class="cf-row"><div><label for="cf-topic">Topic</label><select id="cf-topic" name="topic" required aria-describedby="cf-topic-err"><option value="general">General question</option><option value="recipes">Recipes &amp; cooking</option><option value="account">My account</option><option value="billing">Billing &amp; payments</option><option value="partnership">Partnership</option><option value="press">Press &amp; media</option><option value="feedback">Feedback &amp; ideas</option><option value="security">Security report</option><option value="other">Other</option></select><p class="err small" id="cf-topic-err" aria-live="polite"></p></div>
+<div><label for="cf-subject">Subject <span class="muted">(optional)</span></label><input id="cf-subject" name="subject" type="text" maxlength="150" autocomplete="off"></div></div>
+<label for="cf-message">Your message</label>
+<div class="cf-msg"><textarea id="cf-message" name="message" rows="7" minlength="10" maxlength="5000" required aria-describedby="cf-message-count cf-message-err"></textarea>
+<div class="cf-attach"><label for="cf-file" class="btn ghost sm cf-attach-btn"><span aria-hidden="true">📎</span> Attach files <span class="muted">(optional)</span></label><input id="cf-file" name="file" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.pdf,.txt,.csv,.docx" aria-describedby="cf-file-hint cf-file-err" class="cf-file-input"><span class="muted small" id="cf-message-count" aria-live="off">0 / 5,000</span></div></div>
+<p class="muted small" id="cf-file-hint">Up to 3 files, 5 MB each: JPG, PNG, WebP, PDF, TXT, CSV or Word (.docx). Malcolm can read text, documents and photos (for example a photo of your fridge, a recipe or a menu) and use them in his reply.</p>
+<ul id="cf-files" class="cf-files" aria-label="Attached files"></ul>
+<p class="err small" id="cf-file-err" aria-live="polite"></p>
+<p class="err small" id="cf-message-err" aria-live="polite"></p>
+<div class="cf-hp" aria-hidden="true"><label for="cf-website">Leave this empty</label><input id="cf-website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
+<div class="cf-consent"><input id="cf-consent" name="consent" type="checkbox" value="yes" required aria-describedby="cf-consent-err"><label for="cf-consent">I understand that Malcolm (an AI) will read my message and any attachments to write a reply, that it is also sent to Oliver at AIchef.food, and that it is handled as described in the <a href="/privacy.html#contact">privacy policy</a>.</label></div>
+<p class="err small" id="cf-consent-err" aria-live="polite"></p>
+<div class="cf-actions"><button class="btn lg" type="submit" id="cf-send">Send to Malcolm</button><span class="muted small" id="cf-status" role="status" aria-live="polite"></span></div>
+</form>
+
+<div id="cf-done" class="card contact-done" tabindex="-1" hidden><h2>Thank you, your message is with Malcolm</h2><p id="cf-done-text"></p><p class="muted small" id="cf-done-ref"></p><p class="actions"><button class="btn ghost" type="button" id="cf-again">Send another message</button> <a class="btn ghost" href="/app.html">Ask Malcolm for a recipe</a></p></div>
+</div></section>
+</main><div id="site-footer"></div></body></html>

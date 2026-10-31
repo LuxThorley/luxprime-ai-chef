@@ -13,6 +13,6 @@
   "services": [{ "binding": "MALCOLM", "service": "malcolmai-live" }],
   "kv_namespaces": [{ "binding": "IMAGES", "id": "d19654e3843b4fe7a6fc4337db6eff77" }],
   "ai": { "binding": "AI" },
-  "vars": { "AI_PROVIDER": "malcolm", "MALCOLM_AI_URL": "https://malcolmai-live.oliverluxthorley.workers.dev/", "MALCOLM_AI_MODE": "lattice", "AI_TIMEOUT_MS": "70000", "AI_RETRIES": "0", "IMAGE_PROVIDER": "none", "ADMIN_EMAILS": "", "TESTER_EMAILS": "staging-tester@aichef.test", "MAIL_FROM": "Malcolm · AIchef.food staging <malcolm@aichef.food>", "MAIL_REPLY_TO": "malcolm@aichef.food", "ASSISTANT_SYNC": "malcolm", "ASSISTANT_SYNC_DAILY": "100", "STAGING": "1" },
+  "vars": { "AI_PROVIDER": "malcolm", "MALCOLM_AI_URL": "https://malcolmai-live.oliverluxthorley.workers.dev/", "MALCOLM_AI_MODE": "lattice", "AI_TIMEOUT_MS": "70000", "AI_RETRIES": "0", "IMAGE_PROVIDER": "none", "ADMIN_EMAILS": "", "TESTER_EMAILS": "staging-tester@aichef.test", "MAIL_FROM": "Malcolm · AIchef.food staging <malcolm@aichef.food>", "MAIL_REPLY_TO": "malcolm@aichef.food", "ASSISTANT_SYNC": "malcolm", "ASSISTANT_SYNC_DAILY": "100", "STAGING": "1", "CONTACT_DRY_RUN": "1" },
   "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": true, "persist": true } } // console output is redacted in src/logredact.js; query strings redacted via script settings (redact_query_string)
 }

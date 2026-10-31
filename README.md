@@ -214,3 +214,6 @@ A floating **Ask Malcolm** companion on every page (`public/js/malcolm-widget.js
 - **Reliability**: one Malcolm attempt capped at 18 s (`ASSISTANT_TIMEOUT_MS`), 60 s circuit breaker, then Workers AI (12 s, 200/day), then the offline library.
   Malcolm-side chain reorder is prepared in `patches/malcolm-chat-chain-REVIEW-ONLY.md` (not deployed).
 - **Staging**: `worker/wrangler.staging.jsonc` → `luxprime-ai-chef-staging` with its own empty D1 + KV (no crons, Stripe or email).
+
+## Contact form (feat/contact-form)
+`/contact.html` (linked in the header, mobile bar and footer of every page) posts multipart to `POST /api/contact` (`worker/src/contact.js`): honeypot, signed time-to-submit token, per-IP/per-email D1 rate limits, first-line attachment checks (max 3 x 5 MB; jpg/png/webp/pdf/txt/csv/docx by magic bytes). It hands the message to the `malcolm-mail` Worker (service binding `MALCOLM_MAIL`, secret `CONTACT_TOKEN`), which runs the Malcolm Mail pipeline and returns Malcolm's checked reply; the site emails it via `src/mailer.js` (Resend, from malcolm@aichef.food) and reports delivery back. Staging runs with `CONTACT_DRY_RUN=1` (all checks, nothing sent). Without the binding/secret the form answers 503 and points to malcolm@aichef.food.

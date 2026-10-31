@@ -13,3 +13,11 @@ dist/
 data/img-cache/
 *.pem
 *.key
+# local secrets and backups (never commit)
+.dev.vars
+.dev.vars.*
+**/.dev.vars*
+*.bak
+*.bak-*
+backups/
+.wrangler/
